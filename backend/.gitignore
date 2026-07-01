@@ -1,6 +1,50 @@
+# ============================================================
+# TezzNirmaan Backend — .gitignore
+# ============================================================
+
+# ── Dependencies ─────────────────────────────────────────────
 node_modules/
+.pnp
+.pnp.js
+
+# ── Environment — NEVER commit files with real values ─────────
+# The ONLY allowed env file is .env.example (placeholder values only)
 .env
+.env.local
+.env.development
+.env.production
+.env.staging
+.env.test
+.env.*.local
+!.env.example
+
+# ── Secret / credential files ─────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets.json
+credentials.json
+service-account*.json
+
+# ── Build outputs ─────────────────────────────────────────────
 dist/
-coverage/
+build/
+
+# ── Logs ──────────────────────────────────────────────────────
 *.log
+npm-debug.log*
+logs/
+
+# ── OS / Editor ───────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+.vscode/settings.json
+.idea/
+*.swp
+
+# ── Test coverage ─────────────────────────────────────────────
+coverage/
+.nyc_output/

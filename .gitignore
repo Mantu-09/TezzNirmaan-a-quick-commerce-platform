@@ -1,39 +1,69 @@
-# Dependencies
+# ============================================================
+# TezzNirmaan — Root .gitignore
+# SECURITY: Any file containing real credentials must be listed here.
+# ============================================================
+
+# ── Dependencies ─────────────────────────────────────────────
 node_modules/
 .pnp
 .pnp.js
+.yarn/
 
-# Environment — NEVER commit actual values
+# ── Environment files — NEVER commit any .env with real values ──
+# All variants are blocked. Only .env.example (placeholder values) is allowed.
 .env
 .env.local
+.env.development
+.env.production
+.env.staging
+.env.test
 .env.*.local
+**/.env
+**/.env.local
+**/.env.*
+!**/.env.example
 
-# Build outputs
+# ── Secrets / credentials — belt-and-suspenders block ────────
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets.json
+credentials.json
+service-account*.json
+firebase-adminsdk*.json
+
+# ── Build outputs ─────────────────────────────────────────────
 dist/
 build/
 .next/
 out/
+.output/
 
-# Logs
+# ── Logs ─────────────────────────────────────────────────────
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+lerna-debug.log*
+logs/
 
-# OS files
+# ── OS / Editor files ─────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Editor
 .vscode/settings.json
 .idea/
 *.swp
 *.swo
+*~
 
-# Coverage
+# ── Test coverage ─────────────────────────────────────────────
 coverage/
 .nyc_output/
+jest_html_reporters_attach/
 
-# Render / deployment artifacts
+# ── Render / Deployment ───────────────────────────────────────
 .render-buildinfo.json

@@ -2,6 +2,12 @@
 // Server Entry Point
 // ────────────────────────────────────────────────────────────
 import 'dotenv/config';
+import { validateEnv } from './utils/validateEnv.js';
+
+// Validate ALL required env vars before anything else loads.
+// Server exits immediately with a clear error if any are missing.
+validateEnv();
+
 import app from './app.js';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);

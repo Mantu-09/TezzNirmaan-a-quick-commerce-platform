@@ -24,9 +24,10 @@ export async function createRazorpayOrder(req, res, next) {
 
     // TODO: Check no existing captured payment for this order
 
-    // Create Razorpay order (amount in paise — multiply INR by 100)
+    // Create Razorpay order
+    // total_amount is stored in PAISE (bigint) — pass directly, no multiplication needed
     const razorpayOrder = await razorpay.orders.create({
-      amount: Math.round(order.total_amount * 100),
+      amount: order.total_amount,   // already in paise ✓
       currency: 'INR',
       receipt: order.order_number,
       notes: { order_id: order.id },
