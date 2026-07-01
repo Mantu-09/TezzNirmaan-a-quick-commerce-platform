@@ -1,0 +1,35 @@
+# TezzNirmaan Mobile App — .gitignore
+
+# Dependencies
+node_modules/
+.expo/
+
+# Environment — NEVER commit
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build outputs
+dist/
+build/
+ios/
+android/
+
+# EAS
+.eas/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Metro bundler cache
+.metro-health-check*

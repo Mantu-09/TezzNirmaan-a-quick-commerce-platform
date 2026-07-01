@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "TezzNirmaan",
+    "slug": "tezznirmaan",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#E8740C"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.tezznirmaan.customer",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "We need your location to find nearby shops and for delivery.",
+        "NSCameraUsageDescription": "Used for profile photo.",
+        "NSPhotoLibraryUsageDescription": "Used to select profile photo."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#E8740C"
+      },
+      "package": "com.tezznirmaan.customer",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        { "image": "./assets/splash.png", "backgroundColor": "#E8740C" }
+      ]
+    ],
+    "extra": {
+      "eas": { "projectId": "YOUR_EAS_PROJECT_ID" },
+      "apiBaseUrl": "https://tezznirmaan-api.onrender.com/api/v1",
+      "supabaseUrl": "YOUR_SUPABASE_URL",
+      "supabaseAnonKey": "YOUR_SUPABASE_ANON_KEY"
+    },
+    "owner": "mantu-09"
+  }
+}
