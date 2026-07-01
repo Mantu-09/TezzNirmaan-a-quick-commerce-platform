@@ -1,0 +1,54 @@
+# TezzNirmaan Backend — render.yaml
+# Render.com infrastructure-as-code configuration
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: tezznirmaan-api
+    runtime: node
+    region: singapore   # Closest to India (Patna) with low latency
+    plan: starter       # $7/month — upgrade to standard once live
+
+    # Build command
+    buildCommand: npm install --production
+
+    # Start command
+    startCommand: npm start
+
+    # Auto-deploy on push to main branch
+    autoDeploy: true
+
+    # Health check — Render will restart if this returns non-200
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: PORT
+        value: 3000
+
+      # Supabase — set these in Render Dashboard (never commit values)
+      - key: SUPABASE_URL
+        sync: false   # means: "I'll set this manually in the dashboard"
+
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # Razorpay — set in Render Dashboard
+      - key: RAZORPAY_KEY_ID
+        sync: false
+
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+      # CORS — set to your frontend domains
+      # e.g. "https://tezznirmaan.com,https://app.tezznirmaan.com"
+      - key: CORS_ORIGIN
+        sync: false
