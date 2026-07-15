@@ -102,14 +102,14 @@ export default function HomeScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={shopsLoading} onRefresh={refetchShops} tintColor={Colors.primary} />}
       >
-        {/* Search bar */}
+        {/* Search bar — taps open B3 SearchScreen */}
         <TouchableOpacity
           style={styles.searchBar}
-          onPress={() => shop && navigation.navigate('Category', { shopId: shop.id, categoryName: 'All Products' })}
+          onPress={() => navigation.navigate('SearchTab', { screen: 'SearchMain' })}
           activeOpacity={0.8}
         >
           <Ionicons name="search" size={18} color={Colors.textTertiary} />
-          <Text style={styles.searchPlaceholder}>Search cement, paint, rebar…</Text>
+          <Text style={styles.searchPlaceholder}>Search cement, paint, tiles…</Text>
         </TouchableOpacity>
 
         {/* Delivery promise banner */}

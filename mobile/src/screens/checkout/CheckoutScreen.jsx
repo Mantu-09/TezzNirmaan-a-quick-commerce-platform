@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Alert, ActivityIndicator,
@@ -8,7 +8,9 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import RazorpayCheckout from 'react-native-razorpay';
 import Constants from 'expo-constants';
+import { format, addDays } from 'date-fns';
 import * as ordersApi from '../../api/orders';
+import { getAvailableSlots } from '../../api/slots';      // B6
 import Button from '../../components/common/Button';
 import { formatPaise } from '../../utils/money';
 import { formatSlot, getTomorrowSlots } from '../../utils/date';
@@ -41,8 +43,18 @@ export default function CheckoutScreen({ navigation }) {
   const [selectedSlot,      setSelectedSlot]      = useState(null);
   const [paymentMethod,     setPaymentMethod]     = useState('upi');
   const [placingOrder,      setPlacingOrder]      = useState(false);
+  const [slotDate,          setSlotDate]          = useState(null); // 'YYYY-MM-DD'
 
-  const slots = getTomorrowSlots();
+  // Determine shop from first scheduled item (all items share one shop in TezzNirmaan)
+  const shopId = items[0]?.shopId;
+
+  // B6: pick the next available weekday as default slot date
+  const defaultSlotDate = useMemo(() => {
+    const tomorrow = addDays(new Date(), 1);
+    return format(tomorrow, 'yyyy-MM-dd');
+  }, []);
+
+  const activeSlotDate = slotDate || defaultSlotDate;
 
   const quickSubtotal = quickItems.reduce((s, i)     => s + i.unitPricePaise * i.quantity, 0);
   const schedSubtotal = scheduledItems.reduce((s, i) => s + i.unitPricePaise * i.quantity, 0);
@@ -61,19 +73,50 @@ export default function CheckoutScreen({ navigation }) {
   });
   const addresses = addrData?.addresses || [];
 
+  // B6: Fetch real slot availability from server
+  const shouldFetchSlots = scheduledItems.length > 0 && !!shopId;
+  const { data: slotData, isLoading: slotsLoading } = useQuery({
+    queryKey: ['available-slots', shopId, activeSlotDate],
+    queryFn:  () => getAvailableSlots(shopId, activeSlotDate),
+    enabled:  shouldFetchSlots,
+    staleTime: 2 * 60 * 1000, // 2 min — slots fill up
+  });
+  // Fallback to static slots if shop has no templates configured
+  const serverSlots = slotData?.slots || [];
+  const staticSlots = getTomorrowSlots();
+  const displaySlots = serverSlots.length > 0 ? serverSlots : staticSlots.map(s => ({
+    template_id: s.id,
+    start_time:  s.start.split('T')[1]?.slice(0, 5) || s.start,
+    end_time:    s.end.split('T')[1]?.slice(0, 5)   || s.end,
+    label:       s.label,
+    available:   true,
+    booking_count: 0,
+    max_orders:    10,
+  }));
+
   const handlePlaceOrder = async () => {
     if (!selectedAddressId) { Alert.alert('Address required', 'Please select a delivery address.'); return; }
     if (scheduledItems.length > 0 && !selectedSlot) { Alert.alert('Slot required', 'Please choose a delivery slot for scheduled items.'); return; }
+    if (selectedSlot && !selectedSlot.available) { Alert.alert('Slot full', 'This slot is fully booked. Please select another.'); return; }
 
     setPlacingOrder(true);
     try {
       const orderRes = await ordersApi.placeOrder({
         addressId:     selectedAddressId,
         paymentMethod,
-        scheduledSlot: selectedSlot || undefined,
+        // B6: pass slot as ISO datetimes so backend can create slot booking
+        scheduledSlot: selectedSlot
+          ? {
+              start: `${activeSlotDate}T${selectedSlot.start_time}:00`,
+              end:   `${activeSlotDate}T${selectedSlot.end_time}:00`,
+            }
+          : undefined,
       });
 
-      const orderId = orderRes?.order?.id;
+      const orderId = orderRes?.order?.id || orderRes?.orderId;
+      // A9b: Use server-confirmed total, never locally computed grandTotal.
+      // orderRes.totalAmountPaise comes from the backend's placeOrder response.
+      const serverAmountPaise = orderRes?.totalAmountPaise || orderRes?.total_amount_paise || grandTotal;
 
       // Online payment — open Razorpay native checkout
       if (paymentMethod !== 'cod' && orderRes?.razorpayOrderId) {
@@ -83,7 +126,7 @@ export default function CheckoutScreen({ navigation }) {
             image:        'https://your-logo-url.com/logo.png',
             currency:     'INR',
             key:          RAZORPAY_KEY,
-            amount:       grandTotal,
+            amount:       serverAmountPaise,   // server-confirmed, not client-computed
             name:         'TezzNirmaan',
             order_id:     orderRes.razorpayOrderId,
             prefill: {
@@ -156,9 +199,9 @@ export default function CheckoutScreen({ navigation }) {
                       <Text style={styles.addrLabel}>{addr.label?.toUpperCase() || 'HOME'}</Text>
                       {addr.is_default && <View style={styles.defaultPill}><Text style={styles.defaultText}>DEFAULT</Text></View>}
                     </View>
-                    <Text style={styles.addrName}>{addr.recipient_name}</Text>
+                    <Text style={styles.addrName}>{addr.full_name}</Text>
                     <Text style={styles.addrLine}>{addr.address_line1}{addr.address_line2 ? `, ${addr.address_line2}` : ''}</Text>
-                    <Text style={styles.addrLine}>{addr.city}, {addr.state} – {addr.pin_code}</Text>
+                    <Text style={styles.addrLine}>{addr.city}, {addr.state} – {addr.pincode}</Text>
                   </View>
                 </TouchableOpacity>
               ))}
@@ -170,23 +213,79 @@ export default function CheckoutScreen({ navigation }) {
           )}
         </View>
 
-        {/* ── Step 2: Slot (only for scheduled items) ──────── */}
+        {/* ── Step 2: Slot (only for scheduled items) ────────── */}
         {scheduledItems.length > 0 && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>📅 Scheduled Delivery Slot (Tomorrow)</Text>
-            <View style={styles.slotGrid}>
-              {slots.map((slot) => (
-                <TouchableOpacity
-                  key={slot.id}
-                  style={[styles.slotChip, selectedSlot?.id === slot.id && styles.slotChipSelected]}
-                  onPress={() => setSelectedSlot(slot)}
-                >
-                  <Text style={[styles.slotText, selectedSlot?.id === slot.id && styles.slotTextSelected]}>
-                    {slot.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing[3] }}>
+              <Text style={styles.sectionTitle}>📅 Scheduled Delivery Slot</Text>
+              {/* Date picker — next 3 days */}
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {[1, 2, 3].map(offset => {
+                  const d = format(addDays(new Date(), offset), 'yyyy-MM-dd');
+                  const label = offset === 1 ? 'Tomorrow' : format(addDays(new Date(), offset), 'EEE d');
+                  return (
+                    <TouchableOpacity
+                      key={d}
+                      onPress={() => { setSlotDate(d); setSelectedSlot(null); }}
+                      style={[
+                        styles.datePill,
+                        activeSlotDate === d && styles.datePillSelected,
+                      ]}
+                    >
+                      <Text style={[styles.datePillText, activeSlotDate === d && styles.datePillTextSelected]}>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
+
+            {slotsLoading ? (
+              <ActivityIndicator color={Colors.primary} style={{ marginVertical: Spacing[4] }} />
+            ) : displaySlots.length === 0 ? (
+              <Text style={{ fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.sm, color: Colors.textSecondary, textAlign: 'center', padding: Spacing[4] }}>
+                No delivery slots available for this date. Try another day.
+              </Text>
+            ) : (
+              <View style={styles.slotGrid}>
+                {displaySlots.map((slot) => {
+                  const slotKey = slot.template_id || slot.id;
+                  const isSelected = selectedSlot?.template_id === slotKey;
+                  const isFull = !slot.available;
+                  return (
+                    <TouchableOpacity
+                      key={slotKey}
+                      style={[
+                        styles.slotChip,
+                        isSelected  && styles.slotChipSelected,
+                        isFull      && styles.slotChipFull,
+                      ]}
+                      onPress={() => !isFull && setSelectedSlot(slot)}
+                      disabled={isFull}
+                    >
+                      <Text style={[
+                        styles.slotText,
+                        isSelected  && styles.slotTextSelected,
+                        isFull      && styles.slotTextFull,
+                      ]}>
+                        {slot.label}
+                      </Text>
+                      {/* Capacity bar — only for server-driven slots */}
+                      {slot.max_orders > 0 && (
+                        <View style={styles.slotCapacity}>
+                          <View style={[
+                            styles.slotCapacityFill,
+                            { width: `${Math.min(100, (slot.booking_count / slot.max_orders) * 100)}%`,
+                              backgroundColor: isFull ? Colors.error : isSelected ? Colors.secondary : Colors.primary }
+                          ]} />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
           </View>
         )}
 
@@ -291,13 +390,30 @@ const styles = StyleSheet.create({
 
   slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing[2] },
   slotChip: {
-    paddingHorizontal: Spacing[4], paddingVertical: Spacing[2],
+    paddingHorizontal: Spacing[4], paddingVertical: Spacing[3],
     borderRadius: BorderRadius.lg, borderWidth: 1.5, borderColor: Colors.border,
     backgroundColor: Colors.surface,
+    minWidth: '45%',
   },
   slotChipSelected: { borderColor: Colors.secondary, backgroundColor: Colors.secondaryLight },
+  slotChipFull:     { opacity: 0.45, backgroundColor: Colors.surface },
   slotText:         { fontFamily: Typography.fontFamily.medium, fontSize: Typography.size.sm, color: Colors.text },
   slotTextSelected: { color: Colors.secondary },
+  slotTextFull:     { color: Colors.textTertiary },
+  slotCapacity: {
+    height: 3, borderRadius: 2, backgroundColor: Colors.border,
+    marginTop: 6, overflow: 'hidden',
+  },
+  slotCapacityFill: { height: '100%', borderRadius: 2 },
+
+  datePill: {
+    paddingHorizontal: Spacing[3], paddingVertical: 4,
+    borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  datePillSelected:     { borderColor: Colors.primary, backgroundColor: Colors.primaryLight },
+  datePillText:         { fontFamily: Typography.fontFamily.medium, fontSize: Typography.size.xs, color: Colors.textSecondary },
+  datePillTextSelected: { color: Colors.primary },
 
   payCard: {
     flexDirection: 'row', alignItems: 'center', gap: Spacing[3],

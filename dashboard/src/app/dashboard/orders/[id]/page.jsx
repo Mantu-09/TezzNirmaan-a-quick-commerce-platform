@@ -152,14 +152,14 @@ export default function OrderDetailPage({ params }) {
       <div className="card card-pad" style={{ marginBottom: 'var(--s5)' }}>
         <div style={{ fontWeight: 600, marginBottom: 'var(--s3)' }}>📍 Delivery Address</div>
         <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text-secondary)' }}>
-          <strong style={{ color: 'var(--text)' }}>{addr.recipient_name}</strong><br />
+          <strong style={{ color: 'var(--text)' }}>{addr.full_name}</strong><br />
           {addr.address_line1}{addr.address_line2 ? `, ${addr.address_line2}` : ''}<br />
           {addr.landmark && <>{addr.landmark}<br /></>}
-          {addr.city}, {addr.state} – {addr.pin_code}
+          {addr.city}, {addr.state} – {addr.pincode}
         </div>
-        {addr.recipient_phone && (
+        {addr.phone && (
           <a
-            href={`tel:${addr.recipient_phone}`}
+            href={`tel:${addr.phone}`}
             className="btn btn-outline btn-sm"
             style={{ marginTop: 12, display: 'inline-flex' }}
           >

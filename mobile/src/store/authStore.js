@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { getStoredSession, signOut as apiSignOut } from '../api/auth';
 
 const useAuthStore = create((set, get) => ({
-  user:          null,   // { id, role, phone, email? }
+  user:          null,   // { id, role, phone, email?, setup_complete?, shop_name?, ... }
   token:         null,
   isLoading:     true,   // true during boot session restore
   isAuthenticated: false,
@@ -26,6 +26,10 @@ const useAuthStore = create((set, get) => ({
   setSession: (user, token) => {
     set({ user, token, isAuthenticated: true, isLoading: false });
   },
+
+  // Partially update user in store (e.g. after onboarding completes)
+  updateUser: (patch) =>
+    set((state) => ({ user: state.user ? { ...state.user, ...patch } : state.user })),
 
   // Sign out — clears state and SecureStore (via apiSignOut)
   signOut: async () => {

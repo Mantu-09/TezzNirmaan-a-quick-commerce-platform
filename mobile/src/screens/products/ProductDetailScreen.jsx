@@ -8,8 +8,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { getProduct } from '../../api/products';
+import { getShopRatingSummary } from '../../api/ratings';         // B4
 import TierBadge from '../../components/product/TierBadge';
 import Button from '../../components/common/Button';
+import { RatingBadge } from '../../components/common/StarRating'; // B4
 import { formatPaise, discountPercent, savingsAmount } from '../../utils/money';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
 import useCartStore from '../../store/cartStore';
@@ -29,6 +31,14 @@ export default function ProductDetailScreen({ route, navigation }) {
     queryFn:  () => getProduct(shopId, productId),
     staleTime: 5 * 60 * 1000,
   });
+
+  // B4: shop rating summary (non-blocking, silent fail)
+  const { data: ratingData } = useQuery({
+    queryKey: ['shopRatingSummary', shopId],
+    queryFn:  () => getShopRatingSummary(shopId),
+    staleTime: 10 * 60 * 1000,
+  });
+  const shopRating = ratingData?.summary;
 
   if (isLoading) {
     return (
@@ -105,6 +115,14 @@ export default function ProductDetailScreen({ route, navigation }) {
           <Text style={styles.name}>{product.name}</Text>
           {product.brands?.name && (
             <Text style={styles.brand}>{product.brands.name}</Text>
+          )}
+          {/* B4: Shop rating badge */}
+          {shopRating?.total_ratings > 0 && (
+            <RatingBadge
+              rating={shopRating.avg_overall_rating}
+              count={shopRating.total_ratings}
+              style={{ marginBottom: Spacing[2] }}
+            />
           )}
           <Text style={styles.unit}>Unit: {product.unit}</Text>
 

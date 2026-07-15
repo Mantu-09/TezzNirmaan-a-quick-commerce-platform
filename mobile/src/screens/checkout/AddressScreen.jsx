@@ -16,14 +16,14 @@ export default function AddressScreen({ navigation }) {
   const queryClient = useQueryClient();
 
   const [form, setForm] = useState({
-    recipient_name: '',
-    recipient_phone: '',
+    full_name: '',
+    phone: '',
     address_line1: '',
     address_line2: '',
     landmark: '',
     city: 'Patna',
     state: 'Bihar',
-    pin_code: '',
+    pincode: '',
     label: 'home',
     is_default: false,
   });
@@ -36,10 +36,10 @@ export default function AddressScreen({ navigation }) {
 
   const validate = () => {
     const e = {};
-    if (!form.recipient_name.trim()) e.recipient_name = 'Name is required';
-    if (!/^\d{10}$/.test(form.recipient_phone.trim())) e.recipient_phone = 'Enter a valid 10-digit number';
+    if (!form.full_name.trim()) e.full_name = 'Name is required';
+    if (!/^\d{10}$/.test(form.phone.trim())) e.phone = 'Enter a valid 10-digit number';
     if (!form.address_line1.trim()) e.address_line1 = 'Address line 1 is required';
-    if (!/^\d{6}$/.test(form.pin_code.trim())) e.pin_code = 'Enter a valid 6-digit PIN code';
+    if (!/^\d{6}$/.test(form.pincode.trim())) e.pincode = 'Enter a valid 6-digit PIN code';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -47,7 +47,7 @@ export default function AddressScreen({ navigation }) {
   const mutation = useMutation({
     mutationFn: () => ordersApi.createAddress({
       ...form,
-      recipient_phone: `+91${form.recipient_phone.trim()}`,
+      phone: `+91${form.phone.trim()}`,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['addresses'] });
@@ -86,8 +86,8 @@ export default function AddressScreen({ navigation }) {
             </View>
           </View>
 
-          <Input label="Full Name *"          value={form.recipient_name}  onChangeText={v => set('recipient_name', v)}  error={errors.recipient_name} placeholder="Ramesh Kumar" />
-          <Input label="Mobile Number *"      value={form.recipient_phone} onChangeText={v => set('recipient_phone', v.replace(/\D/g,''))} keyboardType="phone-pad" maxLength={10} prefix="+91" error={errors.recipient_phone} placeholder="XXXXXXXXXX" />
+          <Input label="Full Name *"          value={form.full_name}  onChangeText={v => set('full_name', v)}  error={errors.full_name} placeholder="Ramesh Kumar" />
+          <Input label="Mobile Number *"      value={form.phone} onChangeText={v => set('phone', v.replace(/\D/g,''))} keyboardType="phone-pad" maxLength={10} prefix="+91" error={errors.phone} placeholder="XXXXXXXXXX" />
           <Input label="Address Line 1 *"     value={form.address_line1}   onChangeText={v => set('address_line1', v)}   error={errors.address_line1}  placeholder="House / Flat no., Street name" />
           <Input label="Address Line 2"       value={form.address_line2}   onChangeText={v => set('address_line2', v)}   placeholder="Colony / Locality (optional)" />
           <Input label="Landmark"             value={form.landmark}         onChangeText={v => set('landmark', v)}        placeholder="Near school, hospital etc." />
@@ -101,7 +101,7 @@ export default function AddressScreen({ navigation }) {
             </View>
           </View>
 
-          <Input label="PIN Code *" value={form.pin_code} onChangeText={v => set('pin_code', v.replace(/\D/,''))} keyboardType="number-pad" maxLength={6} error={errors.pin_code} placeholder="800001" />
+          <Input label="PIN Code *" value={form.pincode} onChangeText={v => set('pincode', v.replace(/\D/,''))} keyboardType="number-pad" maxLength={6} error={errors.pincode} placeholder="800001" />
 
           {/* Default toggle */}
           <View style={styles.defaultRow}>

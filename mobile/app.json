@@ -37,16 +37,25 @@
     "plugins": [
       "expo-secure-store",
       "expo-font",
+      "expo-location",
       [
         "expo-splash-screen",
         { "image": "./assets/splash.png", "backgroundColor": "#E8740C" }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "note": "Set SENTRY_AUTH_TOKEN in CI to upload source maps"
+        }
       ]
     ],
     "extra": {
-      "eas": { "projectId": "YOUR_EAS_PROJECT_ID" },
-      "apiBaseUrl": "https://tezznirmaan-api.onrender.com/api/v1",
-      "supabaseUrl": "YOUR_SUPABASE_URL",
-      "supabaseAnonKey": "YOUR_SUPABASE_ANON_KEY"
+      "eas":              { "projectId": "YOUR_EAS_PROJECT_ID" },
+      "apiBaseUrl":       "https://tezznirmaan-api.onrender.com/api/v1",
+      "supabaseUrl":      "YOUR_SUPABASE_URL",
+      "supabaseAnonKey":  "YOUR_SUPABASE_ANON_KEY",
+      "sentryDsn":        "YOUR_SENTRY_DSN"
     },
     "owner": "mantu-09"
   }

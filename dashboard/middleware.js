@@ -40,7 +40,9 @@ export function middleware(request) {
     return NextResponse.redirect(loginUrl);
   }
 
-  const role = payload.role;
+  // Supabase JWTs store custom claims under app_metadata.
+  // Fall back through user_metadata and root-level role for any non-Supabase tokens.
+  const role = payload?.app_metadata?.role || payload?.user_metadata?.role || payload?.role;
 
   // Root path → redirect based on role
   if (pathname === '/') {

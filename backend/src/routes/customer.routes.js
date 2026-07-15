@@ -19,15 +19,27 @@ import {
   updateAddressSchema,
   updateProfileSchema,
 } from '../validators/customer.validators.js';
+import * as r from '../controllers/rating.controller.js';
+import { rateOrderSchema } from '../validators/customer.validators.js';
+import * as slot from '../controllers/slot.controller.js'; // B6
 
 const router = Router();
 
 // ── Browse & Search (public) ──────────────────────────────
+router.get('/search',             c.searchProducts);        // B3: full search
+router.get('/search/suggestions', c.getSearchSuggestions); // B3: autocomplete
 router.get('/shops/nearby',                           validate(nearbyShopsQuerySchema, 'query'), c.getNearbyShops);
 router.get('/shops/:shopId',                          c.getShop);
 router.get('/shops/:shopId/products',                 validate(browseProductsQuerySchema, 'query'), c.getProducts);
 router.get('/shops/:shopId/products/:productId',      c.getProduct);
+
+// B4: Ratings (public — no auth)
+router.get('/shops/:shopId/ratings/summary',          r.getShopRatingSummary);
+router.get('/shops/:shopId/ratings',                  r.getShopRatings);
+// B6: Delivery slot availability (public — no auth)
+router.get('/shops/:shopId/slots',                    slot.getAvailableSlots);
 router.get('/categories',                             c.getCategories);
+
 
 // ── Cart (customer) ───────────────────────────────────────
 router.get   ('/cart',              authenticate, c.getCart);
@@ -43,6 +55,10 @@ router.get ('/orders',                 authenticate, c.getOrders);
 router.get ('/orders/:orderId',        authenticate, c.getOrder);
 router.post('/orders/:orderId/cancel', authenticate, validate(cancelOrderSchema), c.cancelOrder);
 
+// B4: Order ratings (authenticated customer)
+router.post('/orders/:orderId/rate',          authenticate, validate(rateOrderSchema), r.rateOrder);
+router.get ('/orders/:orderId/rating-status', authenticate, r.getRatingStatus);
+
 // ── Addresses (customer) ──────────────────────────────────
 router.get   ('/addresses',     authenticate, c.getAddresses);
 router.post  ('/addresses',     authenticate, validate(createAddressSchema), c.createAddress);
@@ -53,4 +69,10 @@ router.delete('/addresses/:id', authenticate, c.deleteAddress);
 router.get  ('/profile', authenticate, c.getProfile);
 router.patch('/profile', authenticate, validate(updateProfileSchema), c.updateProfile);
 
+// ── Notifications (B1) ───────────────────────────────────
+router.get ('/notifications',                 authenticate, c.getNotifications);
+router.post('/notifications/mark-read',       authenticate, c.markNotificationsRead);
+router.post('/notifications/mark-all-read',   authenticate, c.markAllNotificationsRead);
+
 export default router;
+

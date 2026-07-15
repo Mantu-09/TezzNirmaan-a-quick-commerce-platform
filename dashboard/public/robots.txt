@@ -1,0 +1,7 @@
+User-agent: *
+Disallow: /
+
+# TezzNirmaan Dashboard — Internal Operations Tool
+# This is not a public website. All pages are gated behind authentication.
+# Blocking all bots prevents accidental indexing of the login page
+# and any other URL that might be publicly accessible (e.g. Render preview URL).

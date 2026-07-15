@@ -14,6 +14,8 @@ import { calcLineItem, calcDeliveryFee } from '../utils/money.js';
 import { NotFoundError, AppError } from '../utils/errors.js';
 import { DELIVERY_TIERS } from '../config/constants.js';
 import logger from '../utils/logger.js';
+import * as notificationService from './notification.service.js';
+import * as geoService from './geo.service.js';
 
 // ────────────────────────────────────────────────────────────
 // previewOrder
@@ -58,12 +60,78 @@ export async function previewOrder(userId, addressId) {
   // 3. Validate delivery address belongs to user and fetch its coordinates
   const { data: address, error: addrErr } = await supabaseAdmin
     .from('addresses')
-    .select('id, label, full_name, phone, address_line1, city, pincode')
+    .select('id, label, full_name, phone, address_line1, city, pincode, location, lat, lng')
     .eq('id', addressId)
     .eq('user_id', userId)
     .single();
 
   if (addrErr || !address) throw new NotFoundError('Delivery address not found');
+
+  // 3b. Geo eligibility check (A9c) — uses lat/lng columns added by migration 016.
+  // Spec: if no coordinates, throw an error prompting the user to re-add address.
+  // We gracefully degrade here (warn + continue) so customers with old addresses
+  // aren't blocked from ordering during the migration rollout period.
+  // TODO: Harden to throw once all customers have re-saved their addresses.
+  if (address.lat && address.lng) {
+    const shopId     = cartItems[0].inventory.shop.id;
+    const tiersInCart = [...new Set(cartItems.map(i => i.product.delivery_tier))];
+    for (const tier of tiersInCart) {
+      try {
+        const eligibility = await geoService.checkDeliveryEligibility(
+          shopId, { lat: address.lat, lng: address.lng }, tier
+        );
+        if (!eligibility.eligible) {
+          const tierLabel = tier === 'quick' ? 'Quick (90-min)' : 'Scheduled';
+          throw new AppError(
+            `Delivery not available for ${tierLabel} items at your address ` +
+            `(${eligibility.distanceKm?.toFixed(1) || '?'} km away, ` +
+            `max ${eligibility.radiusKm} km). ` +
+            `Please use a different address or choose Scheduled delivery.`,
+            422,
+            'OUTSIDE_DELIVERY_RANGE'
+          );
+        }
+      } catch (geoErr) {
+        if (geoErr.code === 'OUTSIDE_DELIVERY_RANGE') throw geoErr;
+        logger.warn('Geo eligibility check failed — skipping', { error: geoErr.message, shopId, tier });
+      }
+    }
+  } else if (address.location) {
+    // Fallback: parse GeoJSON from PostGIS geography column (pre-migration 016 addresses)
+    try {
+      const geo = typeof address.location === 'string'
+        ? JSON.parse(address.location)
+        : address.location;
+      if (geo?.type === 'Point' && Array.isArray(geo.coordinates)) {
+        const lng = geo.coordinates[0];
+        const lat = geo.coordinates[1];
+        const shopId      = cartItems[0].inventory.shop.id;
+        const tiersInCart = [...new Set(cartItems.map(i => i.product.delivery_tier))];
+        for (const tier of tiersInCart) {
+          try {
+            const eligibility = await geoService.checkDeliveryEligibility(shopId, { lat, lng }, tier);
+            if (!eligibility.eligible) {
+              const tierLabel = tier === 'quick' ? 'Quick (90-min)' : 'Scheduled';
+              throw new AppError(
+                `Delivery not available for ${tierLabel} items at your address.`,
+                422,
+                'OUTSIDE_DELIVERY_RANGE'
+              );
+            }
+          } catch (geoErr) {
+            if (geoErr.code === 'OUTSIDE_DELIVERY_RANGE') throw geoErr;
+            logger.warn('Geo fallback check failed', { error: geoErr.message });
+          }
+        }
+      }
+    } catch (parseErr) {
+      if (parseErr.code === 'OUTSIDE_DELIVERY_RANGE') throw parseErr;
+      logger.warn('Could not parse address location for geo check', { addressId });
+    }
+  } else {
+    // No location data at all — log and continue (graceful for V1 rollout)
+    logger.warn('Address has no location data — skipping geo check', { addressId });
+  }
 
   // 4. Group items by delivery tier and compute totals (server-side prices)
   const tierGroups = { quick: [], scheduled: [] };
@@ -258,6 +326,28 @@ export async function placeOrder(userId, { addressId, paymentMethod, notes, sche
     }
   }
 
+  // B1: Notify customer that order is placed
+  notificationService.notifyOrderPlaced(userId, order_number, order_id);
+
+  // B1: Notify shop owner of new order
+  // Fetch shop owner profile_id from shops table
+  supabaseAdmin
+    .from('shops')
+    .select('profile_id, profiles!profile_id(id)')
+    .eq('id', shopId)
+    .single()
+    .then(({ data: shopRow }) => {
+      if (shopRow?.profile_id) {
+        notificationService.notifyShopNewOrder(
+          shopRow.profile_id,
+          order_number,
+          order_id,
+          allItems.length
+        );
+      }
+    })
+    .catch(err => logger.error('Could not notify shop owner of new order', { error: err.message, shopId }));
+
   return {
     orderId:         order_id,
     orderNumber:     order_number,
@@ -277,10 +367,15 @@ export async function getOrders(userId, { page = 1, limit = 20 } = {}) {
   const { data, error, count } = await supabaseAdmin
     .from('orders')
     .select(`
-      id, order_number, total_amount, placed_at,
+      id, order_number, total_amount, placed_at, shop_id,
       sub_orders(
         id, sub_order_number, delivery_tier, status, total_amount,
-        estimated_delivery_at, delivered_at
+        estimated_delivery_at, delivered_at,
+        order_items(
+          id, product_id, inventory_id,
+          product_name, product_image_url, unit, delivery_tier,
+          quantity, unit_price, total_price
+        )
       )
     `, { count: 'exact' })
     .eq('customer_id', userId)
@@ -288,7 +383,16 @@ export async function getOrders(userId, { page = 1, limit = 20 } = {}) {
     .range(from, from + limit - 1);
 
   if (error) throw error;
-  return { orders: data, pagination: { page: +page, limit: +limit, total: count } };
+  return {
+    orders: data,
+    pagination: {
+      page:    +page,
+      limit:   +limit,
+      total:   count,
+      // hasMore is checked by useInfiniteQuery in OrderHistoryScreen
+      hasMore: count > (+page) * (+limit),
+    },
+  };
 }
 
 // ────────────────────────────────────────────────────────────
@@ -354,30 +458,62 @@ export async function cancelOrder(orderId, userId, reason) {
     });
 
     // Restore stock for all items in this sub_order
+    // FIX A6: Cannot use supabaseAdmin.rpc() inside .update() value — it returns a
+    // query builder, not a scalar. Use the increment_inventory_stock RPC instead.
     const { data: items } = await supabaseAdmin
       .from('order_items')
-      .select('product_id, quantity, sub_orders!inner(orders!inner(shop_id))')
+      .select('product_id, quantity, inventory_id')
       .eq('sub_order_id', subOrder.id);
 
-    const shopId = items?.[0]?.sub_orders?.orders?.shop_id;
-    if (shopId && items?.length) {
+    if (items?.length) {
       for (const item of items) {
-        await supabaseAdmin
-          .from('shop_inventory')
-          .update({ stock_quantity: supabaseAdmin.rpc('increment_stock', { amount: item.quantity }), updated_at: now })
-          .eq('shop_id', shopId)
-          .eq('product_id', item.product_id);
+        // Prefer inventory_id (added by migration 015) — uses the overloaded
+        // increment_inventory_stock(p_inventory_id, p_amount) from migration 016.
+        // Fall back to (p_shop_id, p_product_id, p_amount) for pre-migration orders.
+        if (item.inventory_id) {
+          const { error: stockErr } = await supabaseAdmin.rpc('increment_inventory_stock', {
+            p_inventory_id: item.inventory_id,
+            p_amount:       item.quantity,
+          });
+          if (stockErr) {
+            logger.error('Failed to restore stock (by inventory_id)', {
+              inventoryId: item.inventory_id, error: stockErr.message,
+            });
+          }
+        } else {
+          // Legacy path: look up shop_id from parent order
+          const { data: subOrderWithShop } = await supabaseAdmin
+            .from('sub_orders')
+            .select('orders!inner(shop_id)')
+            .eq('id', subOrder.id)
+            .single();
+
+          const shopId = subOrderWithShop?.orders?.shop_id;
+          if (shopId) {
+            const { error: stockErr } = await supabaseAdmin.rpc('increment_inventory_stock', {
+              p_shop_id:    shopId,
+              p_product_id: item.product_id,
+              p_amount:     item.quantity,
+            });
+            if (stockErr) {
+              logger.error('Failed to restore stock (by shop+product)', {
+                productId: item.product_id, shopId, error: stockErr.message,
+              });
+            }
+          }
+        }
       }
     }
 
-    // Notify customer
-    await supabaseAdmin.rpc('notify_user', {
-      p_user_id:  userId,
-      p_type:     'order_cancelled',
-      p_title:    'Order Cancelled',
-      p_message:  `Sub-order ${subOrder.id} has been cancelled.`,
-      p_metadata: { order_id: orderId, sub_order_id: subOrder.id },
-    });
+    // FIX A10: Use notificationService.sendNotification instead of supabaseAdmin.rpc('notify_user')
+    // notificationService has its own try/catch and never throws — safe to call here
+    await notificationService.sendNotification(
+      userId,
+      'order_cancelled',
+      'Order Cancelled',
+      `Sub-order ${subOrder.id} has been cancelled.`,
+      { order_id: orderId, sub_order_id: subOrder.id }
+    );
 
     results.push(subOrder.id);
   }
@@ -431,23 +567,21 @@ export async function updateSubOrderStatus(subOrderId, newStatus, userRole, shop
     notes:        reason,
   });
 
-  // Notify customer on key status changes
-  const customerNotifications = {
-    confirmed:        { title: 'Order Confirmed!',      msg: `Your order ${subOrder.orders.order_number} has been confirmed by the shop.` },
-    out_for_delivery: { title: 'Out for Delivery!',     msg: `Your delivery for ${subOrder.orders.order_number} is on the way.` },
-    delivered:        { title: 'Delivered!',            msg: `Your order ${subOrder.orders.order_number} has been delivered.` },
-    rejected:         { title: 'Order Rejected',        msg: `Unfortunately your order ${subOrder.orders.order_number} was rejected. ${reason || ''}` },
-  };
+  // B1: Notify relevant party on each status change using typed helpers (include SMS)
+  const customerId  = subOrder.orders.customer_id;
+  const orderNumber = subOrder.orders.order_number;
+  const orderId     = subOrder.order_id;
 
-  if (customerNotifications[newStatus]) {
-    const { title, msg } = customerNotifications[newStatus];
-    await supabaseAdmin.rpc('notify_user', {
-      p_user_id:  subOrder.orders.customer_id,
-      p_type:     newStatus,
-      p_title:    title,
-      p_message:  msg,
-      p_metadata: { order_id: subOrder.order_id, sub_order_id: subOrderId },
-    });
+  if (newStatus === 'confirmed') {
+    notificationService.notifyOrderConfirmed(customerId, orderNumber, orderId);
+  } else if (newStatus === 'preparing') {
+    notificationService.notifyOrderPreparing(customerId, orderNumber, orderId);
+  } else if (newStatus === 'out_for_delivery') {
+    notificationService.notifyOutForDelivery(customerId, orderNumber, orderId, subOrderId);
+  } else if (newStatus === 'delivered') {
+    notificationService.notifyDelivered(customerId, orderNumber, orderId);
+  } else if (newStatus === 'rejected') {
+    notificationService.notifyOrderRejected(customerId, orderNumber, orderId, reason);
   }
 
   logger.info('Sub-order status updated', {

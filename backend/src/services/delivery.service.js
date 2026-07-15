@@ -5,6 +5,8 @@
 import { supabaseAdmin } from '../config/supabase.js';
 import { assertTransition } from '../utils/stateMachine.js';
 import { NotFoundError, AppError } from '../utils/errors.js';
+import * as notificationService from './notification.service.js';
+import logger from '../utils/logger.js';
 
 /** Get all deliveries for a rider (by their profile_id). */
 export async function getDeliveries(profileId, { status, page = 1, limit = 20 } = {}) {
@@ -133,6 +135,30 @@ export async function assignRider(subOrderId, riderId, assignedBy, shopId) {
     changed_by: assignedBy,
   });
 
+  // B1: Notify rider of new assignment (with OTP so they know it at a glance)
+  // Resolve rider's profile_id for notification targeting
+  const { data: riderProfile } = await supabaseAdmin
+    .from('riders')
+    .select('profile_id, orders:sub_orders!inner(orders!inner(order_number))')
+    .eq('id', riderId)
+    .single();
+
+  if (riderProfile?.profile_id) {
+    // Get order number via sub_order
+    const { data: subOrderInfo } = await supabaseAdmin
+      .from('sub_orders')
+      .select('sub_order_number, orders!inner(order_number)')
+      .eq('id', subOrderId)
+      .single();
+
+    notificationService.notifyRiderNewAssignment(
+      riderProfile.profile_id,
+      subOrderInfo?.orders?.order_number || subOrderInfo?.sub_order_number || subOrderId,
+      subOrderId,
+      deliveryOtp
+    );
+  }
+
   return assignment;
 }
 
@@ -176,6 +202,22 @@ export async function confirmPickup(assignmentId, profileId) {
     .from('riders')
     .update({ status: 'on_delivery', updated_at: now })
     .eq('id', rider.id);
+
+  // B1: Notify customer that order is out for delivery
+  const { data: subOrderInfo } = await supabaseAdmin
+    .from('sub_orders')
+    .select('orders!inner(customer_id, order_number, id)')
+    .eq('id', assignment.sub_order_id)
+    .single();
+
+  if (subOrderInfo?.orders) {
+    notificationService.notifyOutForDelivery(
+      subOrderInfo.orders.customer_id,
+      subOrderInfo.orders.order_number,
+      subOrderInfo.orders.id,
+      assignment.sub_order_id
+    );
+  }
 
   return { message: 'Pickup confirmed' };
 }
@@ -229,6 +271,21 @@ export async function confirmDelivery(assignmentId, profileId, { otp, proofUrl }
     .update({ status: 'available', updated_at: now })
     .eq('id', rider.id);
 
+  // B1: Notify customer that order is delivered
+  const { data: subOrderInfo } = await supabaseAdmin
+    .from('sub_orders')
+    .select('orders!inner(customer_id, order_number, id)')
+    .eq('id', assignment.sub_order_id)
+    .single();
+
+  if (subOrderInfo?.orders) {
+    notificationService.notifyDelivered(
+      subOrderInfo.orders.customer_id,
+      subOrderInfo.orders.order_number,
+      subOrderInfo.orders.id
+    );
+  }
+
   return { message: 'Delivery confirmed' };
 }
 
@@ -277,4 +334,27 @@ export async function cancelDelivery(assignmentId, profileId, reason) {
     .eq('id', rider.id);
 
   return { message: 'Delivery cancelled, sub-order returned to ready_for_pickup' };
+}
+
+/** Rider accepts/acknowledges a delivery assignment. */
+export async function acceptDelivery(assignmentId, profileId) {
+  const { data: rider } = await supabaseAdmin
+    .from('riders')
+    .select('id')
+    .eq('profile_id', profileId)
+    .single();
+  if (!rider) throw new NotFoundError('Rider not found');
+
+  const now = new Date().toISOString();
+  const { data: assignment, error } = await supabaseAdmin
+    .from('delivery_assignments')
+    .update({ accepted_at: now, updated_at: now })
+    .eq('id', assignmentId)
+    .eq('rider_id', rider.id)
+    .eq('is_active', true)
+    .select('id, sub_order_id')
+    .single();
+
+  if (error || !assignment) throw new NotFoundError('Active delivery assignment not found');
+  return { message: 'Delivery accepted', assignmentId: assignment.id };
 }

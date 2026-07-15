@@ -8,11 +8,15 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ordersApi from '../../api/orders';
 import SubOrderCard from '../../components/order/SubOrderCard';
 import Button from '../../components/common/Button';
+import RatingBottomSheet from '../../components/order/RatingBottomSheet';  // B4
 import { formatOrderTime } from '../../utils/date';
 import { subscribeToOrderStatus } from '../../utils/supabase';
+import { getRatingStatus } from '../../api/ratings';                        // B4
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
 
-const CANCELLABLE_STATUSES = ['pending', 'confirmed'];
+// A9d: Only 'pending' orders can be cancelled by the customer.
+// Once the shop has confirmed, the customer must contact support.
+const CANCELLABLE_STATUSES = ['pending'];
 
 export default function OrderTrackingScreen({ route, navigation }) {
   const { orderId } = route.params;
@@ -29,8 +33,20 @@ export default function OrderTrackingScreen({ route, navigation }) {
   const hasTwoTiers = subOrders.length > 1;
 
   // Tab state for mixed-tier orders
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeTab,       setActiveTab]       = useState(0);
+  const [showRating,      setShowRating]      = useState(false);  // B4
   const activeSubOrder = subOrders[activeTab] || subOrders[0];
+
+  // B4: Show rating prompt when any sub_order is delivered and not yet rated
+  const isDelivered = subOrders.some(s => s.status === 'delivered');
+  useEffect(() => {
+    if (!isDelivered || !orderId) return;
+    let cancelled = false;
+    getRatingStatus(orderId)
+      .then(d => { if (!cancelled && !d?.hasRated) setShowRating(true); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isDelivered, orderId]);
 
   // ── Supabase Realtime subscription ──────────────────────────
   useEffect(() => {
@@ -146,6 +162,13 @@ export default function OrderTrackingScreen({ route, navigation }) {
           </Button>
         )}
       </ScrollView>
+
+      {/* B4: Rating bottom sheet — shown after delivery, non-blocking */}
+      <RatingBottomSheet
+        visible={showRating}
+        orderId={orderId}
+        onDismiss={() => setShowRating(false)}
+      />
     </SafeAreaView>
   );
 }

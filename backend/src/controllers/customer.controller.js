@@ -2,8 +2,10 @@
 // Customer Controller — Real Implementations
 // ────────────────────────────────────────────────────────────
 import { supabaseAdmin } from '../config/supabase.js';
-import * as orderService from '../services/order.service.js';
-import * as geoService   from '../services/geo.service.js';
+import * as orderService        from '../services/order.service.js';
+import * as geoService          from '../services/geo.service.js';
+import * as notificationService from '../services/notification.service.js';
+import * as searchService       from '../services/search.service.js';
 import { NotFoundError, AppError } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 
@@ -340,8 +342,17 @@ export async function getAddresses(req, res, next) {
 export async function createAddress(req, res, next) {
   try {
     const userId = req.user.id;
-    const { label, fullName, phone, addressLine1, addressLine2, landmark,
-            city, state, pincode, location, isDefault } = req.body;
+    const body   = req.body;
+
+    // Accept both camelCase (old dashboard) and snake_case (mobile AddressForm)
+    const fullName     = body.fullName     || body.full_name;
+    const addressLine1 = body.addressLine1 || body.address_line1;
+    const addressLine2 = body.addressLine2 || body.address_line2 || null;
+    const isDefault    = body.isDefault    ?? body.is_default ?? false;
+
+    // GPS coordinates — flat fields take priority over nested location object
+    const lat = body.lat ?? body.location?.lat ?? null;
+    const lng = body.lng ?? body.location?.lng ?? null;
 
     // If setting as default, unset previous default first
     if (isDefault) {
@@ -354,16 +365,19 @@ export async function createAddress(req, res, next) {
 
     const insertData = {
       user_id:       userId,
-      label:         label || 'Home',
+      label:         body.label || 'home',
       full_name:     fullName,
-      phone,
+      phone:         body.phone,
       address_line1: addressLine1,
-      address_line2: addressLine2 || null,
-      landmark:      landmark || null,
-      city:          city || 'Patna',
-      state:         state || 'Bihar',
-      pincode,
-      is_default:    isDefault || false,
+      address_line2: addressLine2,
+      landmark:      body.landmark || null,
+      city:          body.city  || 'Patna',
+      state:         body.state || 'Bihar',
+      pincode:       body.pincode,
+      is_default:    isDefault,
+      // GPS columns — written here, GENERATED column auto-computes location geography
+      lat,
+      lng,
     };
 
     const { data, error } = await supabaseAdmin
@@ -455,11 +469,14 @@ export async function getProfile(req, res, next) {
 export async function updateProfile(req, res, next) {
   try {
     const userId = req.user.id;
-    const { fullName, email, avatarUrl } = req.body;
+    const { fullName, full_name, email, avatarUrl, avatar_url, setup_complete } = req.body;
     const dbUpdates = { updated_at: new Date().toISOString() };
-    if (fullName  !== undefined) dbUpdates.full_name   = fullName;
-    if (email     !== undefined) dbUpdates.email       = email;
-    if (avatarUrl !== undefined) dbUpdates.avatar_url  = avatarUrl;
+    // Accept both camelCase and snake_case
+    if ((fullName ?? full_name) !== undefined) dbUpdates.full_name    = fullName ?? full_name;
+    if (email        !== undefined)            dbUpdates.email        = email;
+    if ((avatarUrl ?? avatar_url) !== undefined) dbUpdates.avatar_url = avatarUrl ?? avatar_url;
+    // B2: allow shop owner to mark setup_complete = true via onboarding flow
+    if (setup_complete === true)               dbUpdates.setup_complete = true;
 
     const { data, error } = await supabaseAdmin
       .from('profiles')
@@ -469,6 +486,99 @@ export async function updateProfile(req, res, next) {
       .single();
     if (error) throw error;
     res.json({ success: true, data: { profile: data } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+
+// ── Notifications (B1) ────────────────────────────────────
+
+/** GET /customer/notifications */
+export async function getNotifications(req, res, next) {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const result = await notificationService.getNotifications(req.user.id, { page: +page, limit: +limit });
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /customer/notifications/mark-read  — Body: { ids: [uuid, ...] } */
+export async function markNotificationsRead(req, res, next) {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, error: { message: 'ids must be a non-empty array' } });
+    }
+    const result = await notificationService.markRead(req.user.id, ids);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /customer/notifications/mark-all-read */
+export async function markAllNotificationsRead(req, res, next) {
+  try {
+    const result = await notificationService.markAllRead(req.user.id);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── B3: Search ────────────────────────────────────────────────
+
+/**
+ * GET /search?q=&shopId=&category=&tier=&min_price=&max_price=&in_stock=&sort=&page=&limit=
+ * Public — no auth required.
+ */
+export async function searchProducts(req, res, next) {
+  try {
+    const {
+      q         = '',
+      shopId,
+      category,
+      tier,
+      min_price,
+      max_price,
+      in_stock,
+      sort      = 'relevance',
+      page      = 1,
+      limit     = 20,
+    } = req.query;
+
+    if (!q.trim() && !category && !tier) {
+      return res.json({ success: true, data: { results: [], total: 0, page: 1, hasMore: false } });
+    }
+
+    const result = await searchService.searchProducts(
+      q.trim(),
+      shopId || null,
+      { category, tier, minPrice: min_price, maxPrice: max_price, inStock: in_stock },
+      sort,
+      +page,
+      Math.min(+limit, 50)
+    );
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /search/suggestions?q=&shopId=
+ * Autocomplete \u2014 target < 50ms. Public.
+ */
+export async function getSearchSuggestions(req, res, next) {
+  try {
+    const { q = '', shopId } = req.query;
+    if (!q.trim()) return res.json({ success: true, data: { suggestions: [] } });
+    const suggestions = await searchService.getSuggestions(q.trim(), shopId || null, 5);
+    res.json({ success: true, data: { suggestions } });
   } catch (err) {
     next(err);
   }

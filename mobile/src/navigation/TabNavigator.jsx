@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Typography, Spacing } from '../theme';
 import useCartStore from '../store/cartStore';
+import useAuthStore from '../store/authStore';
+import { subscribeToNotifications } from '../utils/supabase';
 
 // ── Screens ──────────────────────────────────────────────────
 import HomeScreen              from '../screens/home/HomeScreen';
@@ -17,6 +19,8 @@ import OrderHistoryScreen      from '../screens/orders/OrderHistoryScreen';
 import OrderConfirmationScreen from '../screens/orders/OrderConfirmationScreen';
 import OrderTrackingScreen     from '../screens/orders/OrderTrackingScreen';
 import ProfileScreen           from '../screens/profile/ProfileScreen';
+import NotificationsScreen     from '../screens/notifications/NotificationsScreen';
+import SearchScreen            from '../screens/search/SearchScreen';
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -43,6 +47,16 @@ function HomeStack() {
   );
 }
 
+// ── Search stack (B3) ─────────────────────────────────────────
+function SearchStack() {
+  return (
+    <Stack.Navigator screenOptions={defaultStackOptions}>
+      <Stack.Screen name="SearchMain"    component={SearchScreen}        options={{ headerShown: false }} />
+      <Stack.Screen name="ProductDetail" component={ProductDetailScreen} options={{ title: '' }} />
+    </Stack.Navigator>
+  );
+}
+
 // ── Orders stack
 function OrdersStack() {
   return (
@@ -64,11 +78,20 @@ function ProfileStack() {
   );
 }
 
-// ── Cart badge ───────────────────────────────────────────────
-function CartBadge({ count }) {
+// ── Notifications stack
+function NotificationsStack() {
+  return (
+    <Stack.Navigator screenOptions={defaultStackOptions}>
+      <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notifications' }} />
+    </Stack.Navigator>
+  );
+}
+
+// ── Generic badge (reused for cart and notifications) ─────────
+function TabBadge({ count, color = Colors.primary }) {
   if (!count) return null;
   return (
-    <View style={styles.badge}>
+    <View style={[styles.badge, { backgroundColor: color }]}>
       <Text style={styles.badgeText}>{count > 99 ? '99+' : count}</Text>
     </View>
   );
@@ -76,7 +99,20 @@ function CartBadge({ count }) {
 
 // ── Tab Navigator ─────────────────────────────────────────────
 export default function TabNavigator() {
-  const itemCount = useCartStore(s => s.itemCount);
+  const itemCount          = useCartStore(s => s.itemCount);
+  const { user }           = useAuthStore();
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Subscribe to live notification inserts for unread badge
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const unsubscribe = subscribeToNotifications(user.id, () => {
+      setUnreadCount(c => c + 1);
+    });
+
+    return unsubscribe;
+  }, [user?.id]);
 
   return (
     <Tab.Navigator
@@ -88,26 +124,56 @@ export default function TabNavigator() {
         tabBarLabelStyle: styles.tabLabel,
         tabBarIcon: ({ focused, color, size }) => {
           const icons = {
-            HomeTab:    focused ? 'home'          : 'home-outline',
-            CartTab:    focused ? 'cart'          : 'cart-outline',
-            OrdersTab:  focused ? 'receipt'       : 'receipt-outline',
-            ProfileTab: focused ? 'person'        : 'person-outline',
+            HomeTab:          focused ? 'home'          : 'home-outline',
+            SearchTab:        focused ? 'search'        : 'search-outline',
+            CartTab:          focused ? 'cart'          : 'cart-outline',
+            OrdersTab:        focused ? 'receipt'       : 'receipt-outline',
+            NotificationsTab: focused ? 'notifications' : 'notifications-outline',
+            ProfileTab:       focused ? 'person'        : 'person-outline',
           };
           return <Ionicons name={icons[route.name]} size={size} color={color} />;
         },
       })}
     >
       <Tab.Screen name="HomeTab"    component={HomeStack}    options={{ title: 'Home' }} />
+
+      {/* B3: Search tab */}
+      <Tab.Screen name="SearchTab"  component={SearchStack}  options={{ title: 'Search' }} />
+
       <Tab.Screen name="CartTab"    component={CartScreen}   options={{
         title: 'Cart',
         tabBarIcon: ({ focused, color, size }) => (
           <View>
             <Ionicons name={focused ? 'cart' : 'cart-outline'} size={size} color={color} />
-            <CartBadge count={itemCount} />
+            <TabBadge count={itemCount} />
           </View>
         ),
       }} />
+
       <Tab.Screen name="OrdersTab"  component={OrdersStack}  options={{ title: 'Orders' }} />
+
+      {/* B1: Notifications tab with live unread badge */}
+      <Tab.Screen
+        name="NotificationsTab"
+        component={NotificationsStack}
+        options={{
+          title: 'Alerts',
+          tabBarIcon: ({ focused, color, size }) => (
+            <View>
+              <Ionicons
+                name={focused ? 'notifications' : 'notifications-outline'}
+                size={size}
+                color={color}
+              />
+              <TabBadge count={unreadCount} color="#EF4444" />
+            </View>
+          ),
+        }}
+        listeners={{
+          tabPress: () => setUnreadCount(0), // clear badge when tab is tapped
+        }}
+      />
+
       <Tab.Screen name="ProfileTab" component={ProfileStack} options={{ title: 'Profile' }} />
     </Tab.Navigator>
   );
@@ -130,7 +196,6 @@ const styles = StyleSheet.create({
     position:        'absolute',
     top:             -4,
     right:           -8,
-    backgroundColor: Colors.primary,
     borderRadius:    10,
     minWidth:        18,
     height:          18,
@@ -139,7 +204,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   badgeText: {
-    color:      Colors.primaryText,
+    color:      '#FFFFFF',
     fontSize:   Typography.size.xs,
     fontFamily: Typography.fontFamily.bold,
     lineHeight: 18,

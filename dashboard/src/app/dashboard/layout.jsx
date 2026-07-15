@@ -5,13 +5,23 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useOrderAlerts } from '../../hooks/useOrderAlerts';
 import useAuthStore from '../../store/authStore';
 import { getMuted, setMuted } from '../../lib/sounds';
+import NotificationBell from '../../components/NotificationBell';
 
 const NAV_ITEMS = [
-  { href: '/dashboard/orders',    icon: '🛒', label: 'Orders',      roles: ['shop_owner', 'shop_staff'] },
-  { href: '/dashboard/inventory', icon: '📦', label: 'Inventory',   roles: ['shop_owner', 'shop_staff'] },
-  { href: '/dashboard/delivery',  icon: '🛵', label: 'Delivery',    roles: ['shop_owner'] },
+  { href: '/dashboard/orders',    icon: '🛒', label: 'Orders',        roles: ['shop_owner', 'shop_staff'] },
+  { href: '/dashboard/inventory', icon: '📦', label: 'Inventory',     roles: ['shop_owner', 'shop_staff'] },
+  { href: '/dashboard/delivery',  icon: '🛵', label: 'Delivery',      roles: ['shop_owner'] },
+  { href: '/dashboard/analytics', icon: '📈', label: 'Analytics',     roles: ['shop_owner'] },
+  { href: '/dashboard/slots',     icon: '🗓️', label: 'Slots',         roles: ['shop_owner'] },  // B6
+  { href: '/dashboard/reviews',   icon: '⭐', label: 'Reviews',       roles: ['shop_owner'] },
   { href: '/dashboard/summary',   icon: '📊', label: "Today's Summary", roles: ['shop_owner'] },
+  { href: '/admin/shops',         icon: '🏪', label: 'Admin: Shops',  roles: ['platform_admin'] },
+  { href: '/admin/riders',        icon: '👤', label: 'Admin: Riders', roles: ['platform_admin'] },
 ];
+
+
+
+
 
 export default function DashboardLayout({ children }) {
   const pathname = usePathname();
@@ -152,13 +162,17 @@ export default function DashboardLayout({ children }) {
           <span style={{ fontWeight: 700, color: 'var(--primary)', fontSize: 18 }}>
             TezzNirmaan
           </span>
-          {newOrderCount > 0 && (
-            <Link href="/dashboard/orders" style={{ textDecoration: 'none' }}>
-              <span className="badge badge-new">
-                {newOrderCount} New
-              </span>
-            </Link>
-          )}
+          {/* B1: Notification bell + order badge */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <NotificationBell />
+            {newOrderCount > 0 && (
+              <Link href="/dashboard/orders" style={{ textDecoration: 'none' }}>
+                <span className="badge badge-new">
+                  {newOrderCount} New
+                </span>
+              </Link>
+            )}
+          </div>
         </header>
 
         <main>{children}</main>
