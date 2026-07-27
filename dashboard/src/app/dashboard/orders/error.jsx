@@ -1,7 +1,7 @@
 'use client';
 // B7: Orders segment error boundary
 import { useEffect } from 'react';
-import { captureError } from '../../../../lib/sentry-client';
+import { captureError } from '../../../lib/sentry-client';
 
 export default function OrdersError({ error, reset }) {
   useEffect(() => {

@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 
-const PUBLIC_PATHS = ['/login'];
+const PUBLIC_PATHS = [
+  '/login',
+  '/privacy',
+  '/terms',
+  '/shop-signup',
+  '/about',
+];
 
 function decodeJwt(token) {
   try {
@@ -23,6 +29,9 @@ export function middleware(request) {
   ) {
     return NextResponse.next();
   }
+
+  // Marketing root is public — no auth required
+  if (pathname === '/') return NextResponse.next();
 
   const token = request.cookies.get('tn_token')?.value;
 

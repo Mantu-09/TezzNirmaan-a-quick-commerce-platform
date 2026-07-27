@@ -17,6 +17,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import routes from './routes/index.js';
+import internalRoutes from './routes/internal.routes.js'; // P1-E
 import { errorHandler } from './middleware/errorHandler.js';
 import { NotFoundError } from './utils/errors.js';
 import { supabaseAdmin } from './config/supabase.js';
@@ -88,6 +89,8 @@ const apiLimiter = rateLimit({
 app.use('/api/v1/auth/otp/request', otpIpLimiter);
 app.use('/api/v1/auth',             authLimiter);
 app.use('/api/',                    apiLimiter);
+// Note: /internal/* is intentionally excluded from rate limiting —
+// it is secured by X-Internal-Key and should only be called by monitoring tools
 
 // ── Webhook route needs raw body for Razorpay signature verification ──
 // This MUST come before express.json() to preserve the raw buffer
@@ -148,8 +151,14 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-// ── API Routes ────────────────────────────────────────────
+// ── API Routes ────────────────────────────────
 app.use('/api/v1', routes);
+
+// ── P1-E: Internal Monitoring Routes ───────────────────
+// Mounted at /internal (not /api/v1) — no rate limiter, no auth middleware.
+// Security: X-Internal-Key header required (see internal.routes.js).
+// In production: block /internal/* at the reverse proxy/firewall level.
+app.use('/internal', internalRoutes);
 
 // ── 404 Handler ───────────────────────────────────────────
 app.use((req, _res, next) => {

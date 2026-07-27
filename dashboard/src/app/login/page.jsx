@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { authApi } from '../../lib/api';
 import useAuthStore from '../../store/authStore';
@@ -10,50 +10,30 @@ export default function LoginPage() {
   const redirectTo    = searchParams.get('redirect') || '/dashboard/orders';
   const { setSession } = useAuthStore();
 
-  const [step,    setStep]    = useState('phone'); // 'phone' | 'otp'
-  const [phone,   setPhone]   = useState('');
-  const [otp,     setOtp]     = useState(['', '', '', '', '', '']);
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
-  const inputRefs = useRef([]);
+  const [phone,    setPhone]    = useState('');
+  const [password, setPassword] = useState('');
+  const [showPw,   setShowPw]   = useState(false);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
 
-  const handleSendOtp = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (!/^\d{10}$/.test(phone)) { setError('Enter a valid 10-digit mobile number'); return; }
+    if (!/^\d{10}$/.test(phone))  { setError('Enter a valid 10-digit mobile number'); return; }
+    if (!password)                { setError('Password is required'); return; }
+
     setError(''); setLoading(true);
     try {
-      await authApi.requestOtp(`+91${phone}`);
-      setStep('otp');
+      const resp = await authApi.staffLogin(`+91${phone}`, password);
+      const d    = resp.data;
+      setSession(
+        { ...d.user },
+        d.session.accessToken,
+        d.session.refreshToken
+      );
+      const role = d.user?.role;
+      router.push(role === 'rider' ? '/rider' : redirectTo);
     } catch (err) {
-      setError(err.message || 'Failed to send OTP');
-    } finally { setLoading(false); }
-  };
-
-  const handleOtpChange = (idx, val) => {
-    const digit = val.replace(/\D/, '').slice(-1);
-    const next  = [...otp];
-    next[idx]   = digit;
-    setOtp(next);
-    if (digit && idx < 5) inputRefs.current[idx + 1]?.focus();
-    if (next.every(d => d !== '')) verifyOtp(next.join(''));
-  };
-
-  const handleOtpKey = (idx, e) => {
-    if (e.key === 'Backspace' && !otp[idx] && idx > 0) {
-      inputRefs.current[idx - 1]?.focus();
-    }
-  };
-
-  const verifyOtp = async (code) => {
-    setLoading(true); setError('');
-    try {
-      const data = await authApi.verifyOtp(`+91${phone}`, code);
-      setSession(data.user, data.token);
-      router.push(data.user?.role === 'rider' ? '/rider' : redirectTo);
-    } catch (err) {
-      setError('Incorrect OTP. Please try again.');
-      setOtp(['', '', '', '', '', '']);
-      setTimeout(() => inputRefs.current[0]?.focus(), 100);
+      setError(err.message || 'Invalid phone number or password');
     } finally { setLoading(false); }
   };
 
@@ -92,12 +72,10 @@ export default function LoginPage() {
       }}>
         <div className="card card-pad-lg" style={{ width: '100%', maxWidth: 420 }}>
           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
-            {step === 'phone' ? 'Welcome back' : 'Enter OTP'}
+            Welcome back
           </div>
           <div style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 28 }}>
-            {step === 'phone'
-              ? 'Log in to your shop dashboard'
-              : `OTP sent to +91 ${phone}`}
+            Log in to your shop dashboard
           </div>
 
           {error && (
@@ -110,78 +88,78 @@ export default function LoginPage() {
             </div>
           )}
 
-          {step === 'phone' ? (
-            <form onSubmit={handleSendOtp}>
-              <label>Mobile Number</label>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-                <div style={{
-                  padding: '10px 12px', background: 'var(--surface-2)',
-                  border: '1.5px solid var(--border)', borderRadius: 'var(--r-lg)',
-                  fontWeight: 600, color: 'var(--text-secondary)', whiteSpace: 'nowrap',
-                }}>
-                  +91
-                </div>
-                <input
-                  className="input"
-                  type="tel"
-                  inputMode="numeric"
-                  placeholder="10-digit number"
-                  maxLength={10}
-                  value={phone}
-                  onChange={e => { setPhone(e.target.value.replace(/\D/g, '')); setError(''); }}
-                  autoFocus
-                  style={{ flex: 1 }}
-                />
+          <form onSubmit={handleLogin}>
+            {/* Phone */}
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 500, fontSize: 14 }}>
+              Mobile Number
+            </label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+              <div style={{
+                padding: '10px 12px', background: 'var(--surface-2)',
+                border: '1.5px solid var(--border)', borderRadius: 'var(--r-lg)',
+                fontWeight: 600, color: 'var(--text-secondary)', whiteSpace: 'nowrap',
+              }}>
+                +91
               </div>
+              <input
+                className="input"
+                type="tel"
+                inputMode="numeric"
+                placeholder="10-digit number"
+                maxLength={10}
+                value={phone}
+                onChange={e => { setPhone(e.target.value.replace(/\D/g, '')); setError(''); }}
+                autoFocus
+                style={{ flex: 1 }}
+                data-testid="phone-input"
+              />
+            </div>
+
+            {/* Password */}
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 500, fontSize: 14 }}>
+              Password
+            </label>
+            <div style={{ position: 'relative', marginBottom: 24 }}>
+              <input
+                className="input"
+                type={showPw ? 'text' : 'password'}
+                placeholder="Your password"
+                value={password}
+                onChange={e => { setPassword(e.target.value); setError(''); }}
+                style={{ width: '100%', paddingRight: 44 }}
+                data-testid="password-input"
+              />
               <button
-                type="submit"
-                className="btn btn-primary btn-full btn-lg"
-                disabled={phone.length !== 10 || loading}
+                type="button"
+                onClick={() => setShowPw(v => !v)}
+                style={{
+                  position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: 'var(--text-secondary)', fontSize: 18, padding: 0,
+                }}
+                aria-label={showPw ? 'Hide password' : 'Show password'}
               >
-                {loading ? 'Sending…' : 'Send OTP →'}
-              </button>
-            </form>
-          ) : (
-            <div>
-              {/* 6-box OTP */}
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 28 }}>
-                {otp.map((digit, i) => (
-                  <input
-                    key={i}
-                    ref={el => inputRefs.current[i] = el}
-                    type="tel"
-                    inputMode="numeric"
-                    maxLength={1}
-                    value={digit}
-                    onChange={e => handleOtpChange(i, e.target.value)}
-                    onKeyDown={e => handleOtpKey(i, e)}
-                    autoFocus={i === 0}
-                    style={{
-                      width: 52, height: 60, textAlign: 'center',
-                      fontSize: 24, fontWeight: 700, border: '2px solid var(--border)',
-                      borderRadius: 'var(--r-lg)', background: digit ? 'var(--primary-light)' : 'var(--surface)',
-                      borderColor: digit ? 'var(--primary)' : 'var(--border)',
-                      outline: 'none', fontFamily: 'var(--font)',
-                    }}
-                  />
-                ))}
-              </div>
-              <button
-                className="btn btn-primary btn-full btn-lg"
-                disabled={otp.some(d => !d) || loading}
-                onClick={() => verifyOtp(otp.join(''))}
-              >
-                {loading ? 'Verifying…' : 'Verify & Log In'}
-              </button>
-              <button
-                className="btn btn-ghost btn-full"
-                style={{ marginTop: 12 }}
-                onClick={() => { setStep('phone'); setOtp(['','','','','','']); setError(''); }}
-              >
-                ← Change Number
+                {showPw ? '🙈' : '👁️'}
               </button>
             </div>
-          )}
+
+            <button
+              type="submit"
+              className="btn btn-primary btn-full btn-lg"
+              disabled={phone.length !== 10 || !password || loading}
+              data-testid="login-btn"
+            >
+              {loading ? 'Logging in…' : 'Log In →'}
+            </button>
+          </form>
+
+          <div style={{
+            marginTop: 20, padding: '12px 16px',
+            background: 'var(--surface-2)', borderRadius: 'var(--r-lg)',
+            fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6,
+          }}>
+            💡 <strong>Shop owners & riders</strong> log in with the phone number and password set by your admin. Customers use the TezzNirmaan mobile app.
+          </div>
         </div>
       </div>
     </div>

@@ -17,7 +17,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Colors, Typography, Spacing, BorderRadius, Shadow,
 } from '../../theme';
-import { searchProducts, getSearchSuggestions, getCategories } from '../../api/products';
+import { searchProducts, getSearchSuggestions, getCategories, aiSearchParse } from '../../api/products'; // P5-2: aiSearchParse added
+
 import useCartStore from '../../store/cartStore';
 
 const { width: W, height: H } = Dimensions.get('window');
@@ -256,6 +257,9 @@ export default function SearchScreen({ navigation, route }) {
   const [hasMore,     setHasMore]     = useState(false);
   const [focused,     setFocused]     = useState(false);
   const [filterOpen,  setFilterOpen]  = useState(false);
+  // P5-2: AI smart search state
+  const [isAiSearch,    setIsAiSearch]    = useState(false);
+  const [interpretedAs, setInterpretedAs] = useState(null); // what Claude understood
 
   const inputRef     = useRef(null);
   const debounceRef  = useRef(null);
@@ -329,21 +333,56 @@ export default function SearchScreen({ navigation, route }) {
   }, [query, focused]);
 
   // ── Full search ──────────────────────────────────────────
+  // P5-2: AI pre-processing — detect natural language / Hinglish queries
+  // Triggers when: >2 words OR contains non-ASCII (Devanagari Hindi)
+  // Runs BEFORE the FTS call; merges AI-derived filters with user filters.
   async function runSearch(q, activeFilters, activeSort, pg, append = false) {
     if (!append) setLoading(true);
     else setLoadingMore(true);
+
+    // Reset AI state on each new (non-append) search
+    if (!append) {
+      setIsAiSearch(false);
+      setInterpretedAs(null);
+    }
+
     try {
+      let searchQ       = q.trim();
+      let mergedFilters = { ...activeFilters };
+      let aiInterpreted = null;
+
+      // Check if query looks like natural language
+      const isNL = searchQ.split(' ').length > 2 || /[^\x00-\x7F]/.test(searchQ);
+      if (isNL && !append) {
+        try {
+          setIsAiSearch(true);
+          const res = await aiSearchParse(searchQ);
+          const parsed = res?.parsed;
+          if (parsed) {
+            if (parsed.search_terms?.length) searchQ = parsed.search_terms.join(' ');
+            if (!mergedFilters.category && parsed.category) mergedFilters.category = parsed.category;
+            if (!mergedFilters.tier     && parsed.delivery_tier) mergedFilters.tier = parsed.delivery_tier;
+            aiInterpreted = parsed.interpreted_as || null;
+          }
+        } catch {
+          // Claude unavailable — proceed with raw query, clear AI flag
+          setIsAiSearch(false);
+        }
+      }
+
+      setInterpretedAs(aiInterpreted);
+
       const params = {
-        q: q.trim(),
+        q:    searchQ,
         sort: activeSort,
         page: pg,
         limit: 20,
       };
-      if (activeFilters.category) params.category = activeFilters.category;
-      if (activeFilters.tier)     params.tier      = activeFilters.tier;
-      if (activeFilters.minPrice) params.min_price = activeFilters.minPrice;
-      if (activeFilters.maxPrice) params.max_price = activeFilters.maxPrice;
-      if (activeFilters.inStock)  params.in_stock  = 'true';
+      if (mergedFilters.category) params.category = mergedFilters.category;
+      if (mergedFilters.tier)     params.tier      = mergedFilters.tier;
+      if (mergedFilters.minPrice) params.min_price = mergedFilters.minPrice;
+      if (mergedFilters.maxPrice) params.max_price = mergedFilters.maxPrice;
+      if (mergedFilters.inStock)  params.in_stock  = 'true';
 
       const data = await searchProducts(params);
       const res  = data?.results || [];
@@ -583,14 +622,30 @@ export default function SearchScreen({ navigation, route }) {
           autoCorrect={false}
         />
         {query.length > 0 && (
-          <TouchableOpacity onPress={() => { setQuery(''); setResults([]); setSuggestions([]); }} style={styles.clearBtn}>
+          <TouchableOpacity onPress={() => { setQuery(''); setResults([]); setSuggestions([]); setInterpretedAs(null); setIsAiSearch(false); }} style={styles.clearBtn}>
             <Ionicons name="close-circle" size={18} color={Colors.textSecondary} />
           </TouchableOpacity>
+        )}
+        {/* P5-2: AI badge — appears while Claude is processing the query */}
+        {isAiSearch && (
+          <View style={styles.aiBadge}>
+            <Text style={styles.aiBadgeText}>✨ Smart</Text>
+          </View>
         )}
       </View>
 
       {/* Suggestions overlay */}
       {renderSuggestionArea()}
+
+      {/* P5-2: AI interpretation banner — shows what Claude understood the query to mean */}
+        {interpretedAs && results.length > 0 && !loading && (
+          <View style={styles.aiBanner}>
+            <Text style={styles.aiBannerText}>✨ Showing results for: <Text style={styles.aiBannerHighlight}>{interpretedAs}</Text></Text>
+            {interpretedAs.toLowerCase() !== query.trim().toLowerCase() && (
+              <Text style={styles.aiBannerSub}>(Searched for: "{query.trim()}")</Text>
+            )}
+          </View>
+        )}
 
       {/* Sort bar */}
       {results.length > 0 && !loading && (
@@ -675,7 +730,36 @@ const styles = StyleSheet.create({
   },
   clearBtn: { padding: Spacing[1] },
 
-  // Suggestions
+  // P5-2: AI smart-search badge + interpretation banner
+  aiBadge: {
+    backgroundColor: Colors.primary + '18',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  aiBadgeText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: 11, color: Colors.primary,
+  },
+  aiBanner: {
+    backgroundColor: Colors.primary + '0E',
+    borderLeftWidth: 3, borderLeftColor: Colors.primary,
+    marginHorizontal: Spacing[4], marginBottom: Spacing[2],
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing[3], paddingVertical: Spacing[2],
+  },
+  aiBannerText: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.size.sm, color: Colors.text,
+  },
+  aiBannerHighlight: {
+    fontFamily: Typography.fontFamily.semiBold, color: Colors.primary,
+  },
+  aiBannerSub: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.size.xs, color: Colors.textSecondary, marginTop: 2,
+  },
+
+
   suggestionBox: {
     position: 'absolute', top: 60, left: 0, right: 0, zIndex: 100,
     backgroundColor: Colors.surface,

@@ -1,20 +1,31 @@
 // ────────────────────────────────────────────────────────────
-// Inventory Service
+// Inventory Service — P6-5 (Typesense sync added)
 // ────────────────────────────────────────────────────────────
 import { supabaseAdmin } from '../config/supabase.js';
 import { NotFoundError } from '../utils/errors.js';
+import { invalidateShopInventoryCache } from './cache.service.js'; // P2-C
+import { syncInventoryItem, deleteInventoryItem } from '../lib/typesense.js'; // P6-5
+import logger from '../utils/logger.js';
+
+// ── Helper: fetch joined row for Typesense ────────────────────
+
+async function fetchInventoryForSync(inventoryId) {
+  const { data } = await supabaseAdmin
+    .from('shop_inventory')
+    .select(`
+      id, shop_id, price, mrp, stock_quantity, is_in_stock, is_listed,
+      products(id, name, brand_name, category_name, description, delivery_tier, unit),
+      shops(name, city_id)
+    `)
+    .eq('id', inventoryId)
+    .single();
+  return data;
+}
 
 /**
  * Get paginated inventory for a shop, joined with full product details.
  */
 export async function getInventory(shopId, { search, inStock, page = 1, limit = 20 } = {}) {
-  // TODO:
-  // SELECT shop_inventory.*, products(*, categories(name), brands(name))
-  // WHERE shop_id = shopId
-  // Optionally filter: is_in_stock = inStock (if provided)
-  // Optionally full-text search on products.search_vector (if search provided)
-  // ORDER BY products.name ASC
-  // LIMIT / OFFSET pagination
   const from = (page - 1) * limit;
   let query = supabaseAdmin
     .from('shop_inventory')
@@ -24,7 +35,6 @@ export async function getInventory(shopId, { search, inStock, page = 1, limit = 
     .range(from, from + limit - 1);
 
   if (inStock !== undefined) query = query.eq('is_in_stock', inStock);
-  // Note: text search across joined table requires a view or RPC in production
 
   const { data, error, count } = await query;
   if (error) throw error;
@@ -48,19 +58,30 @@ export async function addToInventory(shopId, { productId, price, mrp, costPrice,
   const { data, error } = await supabaseAdmin
     .from('shop_inventory')
     .insert({
-      shop_id: shopId,
-      product_id: productId,
+      shop_id:             shopId,
+      product_id:          productId,
       price,
       mrp,
-      cost_price: costPrice,
-      stock_quantity: stockQuantity,
+      cost_price:          costPrice,
+      stock_quantity:      stockQuantity,
       low_stock_threshold: lowStockThreshold ?? 5,
-      is_listed: isListed ?? true,
+      is_listed:           isListed ?? true,
     })
     .select()
     .single();
 
   if (error) throw error;
+
+  // P2-C: invalidate Redis cache
+  invalidateShopInventoryCache(shopId).catch(() => {});
+
+  // P6-5: sync to Typesense (fire-and-forget, non-fatal)
+  if (data?.is_listed) {
+    fetchInventoryForSync(data.id)
+      .then(row => row && syncInventoryItem(row))
+      .catch(err => logger.warn('addToInventory: Typesense sync failed', { error: err.message }));
+  }
+
   return data;
 }
 
@@ -69,12 +90,12 @@ export async function addToInventory(shopId, { productId, price, mrp, costPrice,
  */
 export async function updateInventoryItem(inventoryId, shopId, updates) {
   const dbUpdates = { updated_at: new Date().toISOString() };
-  if (updates.price !== undefined) dbUpdates.price = updates.price;
-  if (updates.mrp !== undefined) dbUpdates.mrp = updates.mrp;
-  if (updates.costPrice !== undefined) dbUpdates.cost_price = updates.costPrice;
-  if (updates.stockQuantity !== undefined) dbUpdates.stock_quantity = updates.stockQuantity;
+  if (updates.price            !== undefined) dbUpdates.price            = updates.price;
+  if (updates.mrp              !== undefined) dbUpdates.mrp              = updates.mrp;
+  if (updates.costPrice        !== undefined) dbUpdates.cost_price       = updates.costPrice;
+  if (updates.stockQuantity    !== undefined) dbUpdates.stock_quantity   = updates.stockQuantity;
   if (updates.lowStockThreshold !== undefined) dbUpdates.low_stock_threshold = updates.lowStockThreshold;
-  if (updates.isListed !== undefined) dbUpdates.is_listed = updates.isListed;
+  if (updates.isListed         !== undefined) dbUpdates.is_listed        = updates.isListed;
 
   const { data, error } = await supabaseAdmin
     .from('shop_inventory')
@@ -82,10 +103,24 @@ export async function updateInventoryItem(inventoryId, shopId, updates) {
     .eq('id', inventoryId)
     .eq('shop_id', shopId)   // security: validate ownership
     .select()
-    .single();
+    .maybeSingle();          // 0 rows → data=null, no PGRST116 error
 
   if (error) throw error;
   if (!data) throw new NotFoundError('Inventory item not found');
+
+  // P2-C
+  invalidateShopInventoryCache(shopId).catch(() => {});
+
+  // P6-5: sync to Typesense
+  if (data.is_listed) {
+    fetchInventoryForSync(inventoryId)
+      .then(row => row && syncInventoryItem(row))
+      .catch(err => logger.warn('updateInventoryItem: Typesense sync failed', { error: err.message }));
+  } else {
+    // If unlisted, remove from search index
+    deleteInventoryItem(inventoryId).catch(() => {});
+  }
+
   return data;
 }
 
@@ -94,13 +129,13 @@ export async function updateInventoryItem(inventoryId, shopId, updates) {
  * All items must belong to the given shopId.
  */
 export async function bulkUpdateInventory(shopId, items) {
-  // TODO: For true atomicity, wrap in a Postgres function (RPC).
-  // For V1: sequential updates (acceptable for small pilot inventory).
   const results = [];
   for (const item of items) {
     const result = await updateInventoryItem(item.id, shopId, item);
     results.push(result);
   }
+  // Belt-and-suspenders invalidation
+  invalidateShopInventoryCache(shopId).catch(() => {});
   return results;
 }
 
@@ -108,7 +143,6 @@ export async function bulkUpdateInventory(shopId, items) {
  * Remove a product from a shop's inventory (soft delete: set is_listed = false).
  */
 export async function removeFromInventory(inventoryId, shopId) {
-  // Soft delete: hide the product without losing order history references
   const { data, error } = await supabaseAdmin
     .from('shop_inventory')
     .update({ is_listed: false, updated_at: new Date().toISOString() })
@@ -119,5 +153,12 @@ export async function removeFromInventory(inventoryId, shopId) {
 
   if (error) throw error;
   if (!data) throw new NotFoundError('Inventory item not found');
+
+  // P2-C
+  invalidateShopInventoryCache(shopId).catch(() => {});
+
+  // P6-5: remove from Typesense (soft delete hides from search)
+  deleteInventoryItem(inventoryId).catch(() => {});
+
   return data;
 }

@@ -13,6 +13,7 @@ import {
   logout,
   getMe,
   staffLogin,
+  savePushToken,   // P1-A
 } from '../controllers/auth.controller.js';
 
 const router = Router();
@@ -38,5 +39,9 @@ router.get('/me', authenticate, getMe);
 // ── Staff login (shop_owner, rider, platform_admin) ──────
 // POST /auth/staff/login  — phone + password auth for B2B accounts
 router.post('/staff/login', staffLogin);
+
+// ── P1-A: Push token registration ────────────────────────
+// PATCH /auth/push-token  — save Expo push token for the current user
+router.patch('/push-token', authenticate, savePushToken);
 
 export default router;

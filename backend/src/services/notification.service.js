@@ -1,33 +1,50 @@
 // ────────────────────────────────────────────────────────────
-// Notification Service — B1 Enhanced
+// Notification Service — B1 Enhanced + P1-E (Job Queue)
 //
-// V2 approach:
+// V3 approach:
 //   1. Insert into `notifications` table → Supabase Realtime delivers in-app
-//   2. Send SMS via Fast2SMS for critical events (order lifecycle)
+//   2. If job queue (pg-boss) is enabled, enqueue SMS + push as background jobs
+//   3. If queue is disabled (DATABASE_URL not set), fall back to fire-and-forget
 //
 // Fail-silently contract: sendNotification() NEVER throws.
-// Both in-app and SMS failures are logged and swallowed.
+// Both in-app and SMS/push failures are logged and swallowed.
 // ────────────────────────────────────────────────────────────
 import { supabaseAdmin } from '../config/supabase.js';
 import * as smsService from './sms.service.js';
+import * as pushService from './push.service.js'; // P1-A
 import logger from '../utils/logger.js';
+// P1-E: lazy import to avoid circular dep (jobQueue imports this file)
+let _queue = null;
+async function getJobQueue() {
+  if (_queue !== undefined) return _queue;
+  try {
+    const { enqueueNotification, isQueueEnabled } = await import('../lib/jobQueue.js');
+    _queue = isQueueEnabled() ? enqueueNotification : null;
+  } catch {
+    _queue = null;
+  }
+  return _queue;
+}
 
 // ── Internal helpers ─────────────────────────────────────────
 
 /**
- * Look up a user's phone number from the profiles table.
- * Returns null on any failure — SMS is non-critical.
+ * Look up a user's phone number AND push token from the profiles table.
+ * Returns { phone, pushToken } — both nullable on failure.
  */
-async function getUserPhone(userId) {
+async function getUserContactInfo(userId) {
   try {
     const { data } = await supabaseAdmin
       .from('profiles')
-      .select('phone')
+      .select('phone, expo_push_token')
       .eq('id', userId)
       .single();
-    return data?.phone || null;
+    return {
+      phone:     data?.phone           || null,
+      pushToken: data?.expo_push_token || null,
+    };
   } catch {
-    return null;
+    return { phone: null, pushToken: null };
   }
 }
 
@@ -67,23 +84,105 @@ export async function sendNotification(userId, type, title, message, metadata = 
     logger.error('Unexpected notification insert error', { userId, type, error: err.message });
   }
 
-  // ── 2. Send SMS (fire-and-forget, non-blocking) ───────────
-  if (sendSms) {
-    // Don't await — SMS runs in background, never blocks the response
-    getUserPhone(userId)
-      .then(phone => {
-        if (phone) {
-          // Keep SMS concise (max ~120 chars for good deliverability)
-          const smsBody = `TezzNirmaan: ${message}`;
-          return smsService.send(phone, smsBody);
-        }
-      })
-      .catch(err => {
-        logger.error('SMS fire-and-forget error', { userId, type, error: err.message });
-      });
+  // ── 2. P1-E: Route SMS + push through job queue (or fire-and-forget fallback) ──
+  // The job queue guarantees delivery with retries.
+  // Fire-and-forget is used when DATABASE_URL is not configured.
+  const { enqueueNotification, isQueueEnabled } = await import('../lib/jobQueue.js').catch(() => ({}));
+
+  if (isQueueEnabled?.() && sendSms) {
+    // Queue path: enqueue delivery as a background job
+    // The job worker calls sendNotificationDirect() below
+    try {
+      await enqueueNotification(userId, type, title, message, { sendSms, metadata });
+      logger.debug('Notification delivery enqueued', { userId, type });
+    } catch (err) {
+      // Queue failed — fall through to fire-and-forget
+      logger.warn('Queue enqueue failed, falling back to fire-and-forget', { userId, type, error: err.message });
+      _fireAndForget(userId, type, title, message, metadata, sendSms);
+    }
+  } else {
+    // Fire-and-forget path (queue disabled OR sendSms = false)
+    _fireAndForget(userId, type, title, message, metadata, sendSms);
   }
 
   return notificationId;
+}
+
+/**
+ * Direct delivery — called by the pg-boss worker (P1-E) AND by the fallback path.
+ * Sends SMS + push synchronously (awaited inside the worker).
+ * Also exported so job queue workers can call it directly.
+ *
+ * @param {string} userId
+ * @param {string} type
+ * @param {string} title
+ * @param {string} body
+ * @param {object} jobData  { sendSms, metadata }
+ */
+export async function sendNotificationDirect(userId, type, title, body, jobData = {}) {
+  const { sendSms = true, metadata = {} } = jobData;
+  const { phone, pushToken } = await getUserContactInfo(userId);
+
+  const deliveryJobs = [];
+
+  if (sendSms && phone) {
+    const smsBody = `TezzNirmaan: ${body}`;
+    deliveryJobs.push(
+      smsService.send(phone, smsBody)
+        .catch(err => logger.error('SMS delivery error', { userId, type, error: err.message }))
+    );
+  }
+
+  if (pushToken) {
+    deliveryJobs.push(
+      pushService.sendPushNotification(
+        pushToken,
+        title,
+        body,
+        { type, orderId: metadata?.order_id, subOrderId: metadata?.sub_order_id }
+      )
+    );
+  }
+
+  if (deliveryJobs.length > 0) {
+    await Promise.allSettled(deliveryJobs);
+    logger.debug('sendNotificationDirect complete', { userId, type, channels: deliveryJobs.length });
+  }
+}
+
+/**
+ * Internal fire-and-forget (non-blocking) delivery.
+ * Used when the job queue is disabled.
+ */
+function _fireAndForget(userId, type, title, message, metadata, sendSms) {
+  getUserContactInfo(userId)
+    .then(({ phone, pushToken }) => {
+      const jobs = [];
+
+      if (sendSms && phone) {
+        const smsBody = `TezzNirmaan: ${message}`;
+        jobs.push(
+          smsService.send(phone, smsBody)
+            .catch(err => logger.error('SMS fire-and-forget error', { userId, type, error: err.message }))
+        );
+      }
+
+      if (pushToken) {
+        jobs.push(
+          pushService.sendPushNotification(
+            pushToken,
+            title,
+            message,
+            { type, orderId: metadata?.order_id, subOrderId: metadata?.sub_order_id }
+          )
+        );
+      }
+
+      return Promise.allSettled(jobs);
+    })
+    .catch(err => {
+      logger.error('Notification fire-and-forget error (non-fatal)', { userId, type, error: err.message });
+    });
 }
 
 // ── Read / Update ─────────────────────────────────────────────
@@ -249,5 +348,18 @@ export function notifyLowStock(shopOwnerId, productName, stockQty) {
     `"${productName}" is running low — only ${stockQty} units left.`,
     { product_name: productName },
     false  // SMS: no — non-critical operational alert
+  );
+}
+
+// P1-B: Refund notification (triggered by refund.processed webhook from Razorpay)
+export function notifyRefundProcessed(customerId, orderNumber, orderId, amountRupees) {
+  return sendNotification(
+    customerId,
+    'refund_processed',
+    'Refund Processed 💰',
+    `Your refund of ₹${amountRupees} for order ${orderNumber} has been processed and ` +
+    `will appear in your account within 5-7 business days.`,
+    { order_id: orderId, order_number: orderNumber },
+    true  // SMS: yes — customer must know the refund is on its way
   );
 }

@@ -6,6 +6,7 @@ import * as orderService        from '../services/order.service.js';
 import * as geoService          from '../services/geo.service.js';
 import * as notificationService from '../services/notification.service.js';
 import * as searchService       from '../services/search.service.js';
+import { reorderFromHistory }   from '../services/reorder.service.js'; // P2-D
 import { NotFoundError, AppError } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 
@@ -276,12 +277,82 @@ export async function previewOrder(req, res, next) {
 export async function placeOrder(req, res, next) {
   try {
     const userId = req.user.id;
-    const { addressId, paymentMethod, notes, scheduledSlot } = req.body;
+    const { addressId, paymentMethod, notes, scheduledSlot, promoCode } = req.body;
 
-    logger.info('Place order request', { userId, paymentMethod });
-    const result = await orderService.placeOrder(userId, { addressId, paymentMethod, notes, scheduledSlot });
+    logger.info('Place order request', { userId, paymentMethod, hasPromo: !!promoCode });
+    const result = await orderService.placeOrder(userId, { addressId, paymentMethod, notes, scheduledSlot, promoCode });
 
     res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── P4-3B: Basket (multi-shop) controllers ────────────────
+
+/** POST /orders/basket/preview — multi-shop dry-run */
+export async function previewBasket(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { addressId } = req.body;
+    const preview = await orderService.previewBasket(userId, addressId);
+    res.json({ success: true, data: { preview } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /orders/basket — place a multi-shop basket order */
+export async function placeBasketOrder(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { addressId, paymentMethod, notes, promoCode } = req.body;
+
+    logger.info('Place basket order request', { userId, paymentMethod, hasPromo: !!promoCode });
+    const result = await orderService.placeBasketOrder(userId, { addressId, paymentMethod, notes, promoCode });
+
+    res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** GET /orders/baskets/:basketId — basket detail with all shop orders */
+export async function getBasket(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { basketId } = req.params;
+
+    const { data: basket, error: basketErr } = await supabaseAdmin
+      .from('order_baskets')
+      .select('*')
+      .eq('id', basketId)
+      .eq('user_id', userId)
+      .single();
+
+    if (basketErr || !basket) {
+      return res.status(404).json({ success: false, error: 'Basket not found' });
+    }
+
+    // Fetch all orders that belong to this basket
+    const { data: orders, error: ordersErr } = await supabaseAdmin
+      .from('orders')
+      .select(`
+        id, order_number, total_amount, placed_at, shop_id,
+        shops(id, name),
+        sub_orders(
+          id, sub_order_number, delivery_tier, status, total_amount,
+          estimated_delivery_at, delivered_at,
+          order_items(id, product_name, product_image_url, quantity, unit, unit_price, total_price)
+        )
+      `)
+      .eq('basket_id', basketId)
+      .eq('customer_id', userId)
+      .order('placed_at', { ascending: true });
+
+    if (ordersErr) throw ordersErr;
+
+    res.json({ success: true, data: { basket, orders: orders || [] } });
   } catch (err) {
     next(err);
   }
@@ -314,7 +385,20 @@ export async function cancelOrder(req, res, next) {
     const userId = req.user.id;
     const { orderId } = req.params;
     const { reason } = req.body;
-    const result = await orderService.cancelOrder(orderId, userId, reason);
+    // P1-B: Route through the full production cancel flow (window check + refund + notifications)
+    const result = await orderService.cancelOrderByCustomer(orderId, userId, reason);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /orders/:orderId/reorder  — P2-D */
+export async function reorder(req, res, next) {
+  try {
+    const userId  = req.user.id;
+    const { orderId } = req.params;
+    const result  = await reorderFromHistory(orderId, userId);
     res.json({ success: true, data: result });
   } catch (err) {
     next(err);

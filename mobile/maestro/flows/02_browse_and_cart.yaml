@@ -1,0 +1,41 @@
+# ──────────────────────────────────────────────────────────────
+# Flow 02: Browse by category and add first item to cart
+#
+# Pre-conditions:
+#   • User already logged in (run flow 01 first, or launchApp without clearState
+#     if auth token is persisted in SecureStore from a previous run)
+#   • At least one shop seeded near Patna with Cement & Blocks products
+#
+# Verified against source:
+#   • HomeScreen.jsx → categories array: id "cement", name "Cement & Blocks"
+#   • HomeScreen.jsx → cart button shows numeric badge when itemCount > 0
+#   • CartScreen.jsx → button text: "Proceed to Checkout →"
+#   • TabNavigator   → tab labels: Home, Cart
+# ──────────────────────────────────────────────────────────────
+
+appId: in.tezznirmaan.app
+---
+# 1. Launch (preserves auth state from flow 01)
+- launchApp
+
+# 2. Home screen should be visible
+- assertVisible: "TezzNirmaan"
+- assertVisible: "Shop by Category"
+
+# 3. Tap the "Cement & Blocks" category card
+- tapOn: "Cement & Blocks"
+
+# 4. Category screen loads with products
+- assertVisible: "Cement & Blocks"   # stack header title
+
+# 5. Tap the first "Add" button (ProductCard add-to-cart button)
+- tapOn:
+    text: "Add"
+    index: 0
+
+# 6. Navigate to Cart via header icon or CartTab
+- tapOn: "Cart"   # bottom tab label
+
+# 7. Cart screen shows the added item
+- assertVisible: "My Cart"           # navigation header title
+- assertVisible: "Proceed to Checkout →"

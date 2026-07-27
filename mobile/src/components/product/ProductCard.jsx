@@ -1,8 +1,8 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import TierBadge from './TierBadge';
+import ProductImage from './ProductImage'; // TD-05
 import { formatPaise, discountPercent } from '../../utils/money';
 import { Colors, Typography, BorderRadius, Spacing, Shadow } from '../../theme';
 import useCartStore from '../../store/cartStore';
@@ -32,8 +32,8 @@ export default function ProductCard({ item, shopId, onPress }) {
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.92}>
       {/* Product image */}
       <View style={styles.imageWrap}>
-        <Image
-          source={product.images?.[0] || require('../../../assets/placeholder.png')}
+        <ProductImage
+          uri={product.images?.[0]}
           style={styles.image}
           contentFit="cover"
           transition={200}

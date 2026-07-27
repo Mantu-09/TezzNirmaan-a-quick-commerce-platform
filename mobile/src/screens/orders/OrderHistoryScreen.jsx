@@ -1,9 +1,29 @@
-import React, { useState, useCallback } from 'react';
+// ────────────────────────────────────────────────────────────
+// OrderHistoryScreen — P2-D fix
+//
+// Changes from the broken Phase-1 version:
+//   OLD: optimistically adds items to local cart store using stale
+//        inventory_id / prices from order_items (often wrong or
+//        null by the time the component renders).
+//
+//   NEW: calls POST /orders/:id/reorder (server-side)
+//        → server validates current stock & prices
+//        → returns { added, skipped, price_changes, skipped_items }
+//        → shows appropriate bottom-sheet / alert based on result
+//
+// UX flows:
+//   1. All items available + no price changes → success toast → Cart
+//   2. Some unavailable → bottom sheet: "X added, Y unavailable: [list]"
+//      + "View Cart" CTA
+//   3. Price changes detected → price-change warning modal before Cart
+// ────────────────────────────────────────────────────────────
+import React, { useState, useCallback, useRef } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, Alert,
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  ActivityIndicator, Modal, ScrollView, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import * as ordersApi from '../../api/orders';
 import { OrderCardSkeleton } from '../../components/common/SkeletonLoader';
@@ -11,9 +31,8 @@ import EmptyState from '../../components/common/EmptyState';
 import { formatPaise } from '../../utils/money';
 import { formatOrderTime, timeAgo } from '../../utils/date';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
-import useCartStore from '../../store/cartStore';
 
-// Status → color mapping
+// ── Status → color mapping ────────────────────────────────────
 const STATUS_STYLE = {
   pending:          { bg: Colors.warningLight,  text: Colors.warning  },
   confirmed:        { bg: Colors.infoLight,     text: Colors.info     },
@@ -24,7 +43,125 @@ const STATUS_STYLE = {
   cancelled:        { bg: Colors.errorLight,    text: Colors.error    },
 };
 
-function OrderCard({ order, onPress, onReorder }) {
+// ── Success toast (auto-dismiss) ─────────────────────────────
+function SuccessToast({ visible, message }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (visible) {
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1, duration: 250, useNativeDriver: true }),
+        Animated.delay(2000),
+        Animated.timing(opacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  if (!visible) return null;
+  return (
+    <Animated.View style={[styles.toast, { opacity }]}>
+      <Ionicons name="checkmark-circle" size={18} color="#fff" />
+      <Text style={styles.toastText}>{message}</Text>
+    </Animated.View>
+  );
+}
+
+// ── Reorder Result Bottom Sheet ──────────────────────────────
+function ReorderSheet({ result, onViewCart, onClose }) {
+  if (!result) return null;
+
+  const hasPriceChanges = result.price_changes?.length > 0;
+  const hasSkipped      = result.skipped > 0;
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.sheetOverlay}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
+        <View style={styles.sheet}>
+          {/* Handle */}
+          <View style={styles.sheetHandle} />
+
+          {/* Header */}
+          <View style={styles.sheetHeader}>
+            <View style={[styles.sheetIconWrap, { backgroundColor: hasSkipped ? Colors.warningLight : Colors.successLight }]}>
+              <Ionicons
+                name={hasSkipped ? 'warning-outline' : 'checkmark-circle-outline'}
+                size={28}
+                color={hasSkipped ? Colors.warning : Colors.success}
+              />
+            </View>
+            <Text style={styles.sheetTitle}>
+              {hasSkipped
+                ? `${result.added} added · ${result.skipped} unavailable`
+                : `${result.added} item${result.added !== 1 ? 's' : ''} added to cart`
+              }
+            </Text>
+            <Text style={styles.sheetSub}>
+              {hasSkipped
+                ? 'Some items are out of stock or no longer listed.'
+                : 'Your cart is ready for checkout.'}
+            </Text>
+          </View>
+
+          {/* Price change warning */}
+          {hasPriceChanges && (
+            <View style={styles.priceWarnBox}>
+              <Ionicons name="pricetag-outline" size={14} color={Colors.warning} />
+              <Text style={styles.priceWarnText}>
+                Prices have changed since your last order for {result.price_changes.length} item{result.price_changes.length !== 1 ? 's' : ''}.
+              </Text>
+            </View>
+          )}
+
+          {/* Price changes detail */}
+          {hasPriceChanges && (
+            <View style={styles.priceList}>
+              {result.price_changes.map((pc, i) => {
+                const higher = pc.diff_paise > 0;
+                return (
+                  <View key={i} style={styles.priceRow}>
+                    <Text style={styles.priceProduct} numberOfLines={1}>{pc.product_name}</Text>
+                    <View style={styles.priceValues}>
+                      <Text style={styles.priceOld}>{formatPaise(pc.original_price_paise)}</Text>
+                      <Ionicons name={higher ? 'arrow-up' : 'arrow-down'} size={12} color={higher ? Colors.error : Colors.success} />
+                      <Text style={[styles.priceNew, { color: higher ? Colors.error : Colors.success }]}>
+                        {formatPaise(pc.current_price_paise)}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Skipped items list */}
+          {hasSkipped && result.skipped_items?.length > 0 && (
+            <View style={styles.skippedBox}>
+              <Text style={styles.skippedLabel}>Not available:</Text>
+              {result.skipped_items.map((name, i) => (
+                <Text key={i} style={styles.skippedItem}>· {name}</Text>
+              ))}
+            </View>
+          )}
+
+          {/* CTAs */}
+          <TouchableOpacity style={styles.sheetCta} onPress={onViewCart}>
+            <Ionicons name="cart" size={18} color="#fff" />
+            <Text style={styles.sheetCtaText}>
+              {result.added > 0 ? 'View Cart' : 'Go to Cart'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.sheetSecondary} onPress={onClose}>
+            <Text style={styles.sheetSecondaryText}>Continue Browsing</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ── OrderCard ─────────────────────────────────────────────────
+function OrderCard({ order, onPress, onReorder, reordering }) {
   const subOrderCount = order.sub_orders?.length || 1;
   const status        = order.sub_orders?.[0]?.status || 'pending';
   const statusStyle   = STATUS_STYLE[status] || STATUS_STYLE.pending;
@@ -72,25 +209,124 @@ function OrderCard({ order, onPress, onReorder }) {
       {/* Footer */}
       <View style={styles.cardFooter}>
         <Text style={styles.total}>{formatPaise(order.total_amount)}</Text>
-        {/* Reorder — prominent CTA */}
-        <TouchableOpacity style={styles.reorderBtn} onPress={onReorder}>
-          <Ionicons name="refresh-outline" size={14} color={Colors.primary} />
-          <Text style={styles.reorderText}>Reorder</Text>
+
+        {/* Reorder CTA */}
+        <TouchableOpacity
+          style={[styles.reorderBtn, reordering && styles.reorderBtnLoading]}
+          onPress={onReorder}
+          disabled={reordering}
+        >
+          {reordering
+            ? <ActivityIndicator size="small" color={Colors.primary} />
+            : <Ionicons name="refresh-outline" size={14} color={Colors.primary} />
+          }
+          <Text style={styles.reorderText}>
+            {reordering ? 'Adding…' : 'Reorder'}
+          </Text>
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
   );
 }
 
+// ── BasketCard — P4-3B: Multi-shop order group ───────────────
+function BasketCard({ basketId, orders, onPressOrder }) {
+  const [expanded, setExpanded] = useState(true);
+
+  const basketTotal = orders.reduce((s, o) => s + (o.total_amount || 0), 0);
+  const shopNames   = orders.map(o => o.shops?.name || `Shop`).join(', ');
+  const allStatuses = orders.flatMap(o => o.sub_orders?.map(s => s.status) || []);
+  const overallStatus = allStatuses.includes('pending')       ? 'pending'
+                      : allStatuses.includes('confirmed')     ? 'confirmed'
+                      : allStatuses.includes('out_for_delivery') ? 'out_for_delivery'
+                      : allStatuses.every(s => s === 'delivered') ? 'delivered'
+                      : allStatuses.every(s => s === 'cancelled')  ? 'cancelled'
+                      : 'pending';
+
+  const statusStyle = STATUS_STYLE[overallStatus] || STATUS_STYLE.pending;
+
+  return (
+    <View style={styles.basketCard}>
+      {/* Basket header */}
+      <TouchableOpacity
+        style={styles.basketHeader}
+        onPress={() => setExpanded(e => !e)}
+        activeOpacity={0.8}
+      >
+        <View style={styles.basketIconWrap}>
+          <Text style={styles.basketEmoji}>🛒</Text>
+        </View>
+        <View style={styles.basketHeaderText}>
+          <Text style={styles.basketTitle}>Multi-shop order · {orders.length} shops</Text>
+          <Text style={styles.basketShops} numberOfLines={1}>{shopNames}</Text>
+        </View>
+        <View style={styles.basketHeaderRight}>
+          <Text style={styles.basketTotal}>{formatPaise(basketTotal)}</Text>
+          <View style={[styles.statusPill, { backgroundColor: statusStyle.bg, marginTop: 4 }]}>
+            <Text style={[styles.statusText, { color: statusStyle.text }]}>
+              {overallStatus.replace(/_/g, ' ')}
+            </Text>
+          </View>
+          <Ionicons
+            name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'}
+            size={16}
+            color={Colors.textSecondary}
+            style={{ marginTop: 4 }}
+          />
+        </View>
+      </TouchableOpacity>
+
+      {/* Expanded shop order rows */}
+      {expanded && (
+        <View style={styles.basketOrders}>
+          {orders.map((order, idx) => {
+            const shopStatus = order.sub_orders?.[0]?.status || 'pending';
+            const shopStyle  = STATUS_STYLE[shopStatus] || STATUS_STYLE.pending;
+            return (
+              <TouchableOpacity
+                key={order.id}
+                style={[styles.basketOrderRow, idx < orders.length - 1 && styles.basketOrderDivider]}
+                onPress={() => onPressOrder(order.id)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.basketOrderLeft}>
+                  <Text style={styles.basketOrderShop} numberOfLines={1}>
+                    🏪 {order.shops?.name || 'Shop'}
+                  </Text>
+                  <Text style={styles.basketOrderNum}>#{order.order_number}</Text>
+                </View>
+                <View style={styles.basketOrderRight}>
+                  <Text style={styles.basketOrderTotal}>{formatPaise(order.total_amount)}</Text>
+                  <View style={[styles.statusPill, { backgroundColor: shopStyle.bg, marginTop: 2 }]}>
+                    <Text style={[styles.statusText, { color: shopStyle.text }]}>
+                      {shopStatus.replace(/_/g, ' ')}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────
 export default function OrderHistoryScreen({ navigation }) {
-  const { addItem } = useCartStore();
+  const queryClient = useQueryClient();
+
+  // Per-order loading state (orderId → boolean)
+  const [reorderingId, setReorderingId] = useState(null);
+
+  // Bottom sheet state
+  const [sheetResult,  setSheetResult]  = useState(null);
+
+  // Toast state
+  const [toast,        setToast]        = useState({ visible: false, message: '' });
 
   const {
-    data,
-    isLoading,
-    isFetchingNextPage,
-    fetchNextPage,
-    hasNextPage,
+    data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage,
   } = useInfiniteQuery({
     queryKey:          ['orders'],
     queryFn:           ({ pageParam = 1 }) => ordersApi.getOrders(pageParam),
@@ -100,38 +336,101 @@ export default function OrderHistoryScreen({ navigation }) {
 
   const orders = data?.pages?.flatMap(p => p?.orders || []) || [];
 
-  const handleReorder = useCallback((order) => {
-    const items = order.sub_orders?.flatMap(s => s.order_items || []) || [];
-    if (items.length === 0) return;
+  // P4-3B: Group orders by basket_id for multi-shop display
+  // Returns an array of items that are either:
+  //   { type: 'basket', basketId, orders: [...] }  — multi-shop group
+  //   { type: 'order', ...order }                  — single order (basket_id === null)
+  const listItems = React.useMemo(() => {
+    const baskets = {};
+    const result  = [];
+    const seen    = new Set();
 
-    // Optimistically add all items back to cart
-    items.forEach(item => {
-      addItem({
-        productId:      item.product_id,
-        inventoryId:    item.inventory_id,
-        shopId:         order.shop_id,
-        name:           item.product_name,
-        imageUrl:       item.product_image || null,
-        unit:           item.unit,
-        deliveryTier:   item.delivery_tier,
-        unitPricePaise: item.unit_price,
-        quantity:       item.quantity,
+    for (const order of orders) {
+      if (order.basket_id) {
+        if (!baskets[order.basket_id]) {
+          baskets[order.basket_id] = [];
+        }
+        baskets[order.basket_id].push(order);
+      }
+    }
+
+    for (const order of orders) {
+      if (seen.has(order.id)) continue;
+      if (order.basket_id) {
+        if (!seen.has(order.basket_id)) {
+          seen.add(order.basket_id);
+          baskets[order.basket_id].forEach(o => seen.add(o.id));
+          result.push({ type: 'basket', key: order.basket_id, basketId: order.basket_id, orders: baskets[order.basket_id] });
+        }
+      } else {
+        seen.add(order.id);
+        result.push({ type: 'order', key: order.id, ...order });
+      }
+    }
+    return result;
+  }, [orders]);
+
+  // ── Reorder handler (P2-D fixed) ─────────────────────────────
+  const handleReorder = useCallback(async (order) => {
+    setReorderingId(order.id);
+    try {
+      const result = await ordersApi.reorder(order.id);
+
+      if (result.added === 0) {
+        // All items unavailable
+        setSheetResult(result);
+        return;
+      }
+
+      if (result.skipped > 0 || result.price_changes?.length > 0) {
+        // Partial add or price changes → show bottom sheet
+        setSheetResult(result);
+        return;
+      }
+
+      // All items added, no warnings → toast + navigate
+      setToast({ visible: true, message: `${result.added} item${result.added !== 1 ? 's' : ''} added to cart ✓` });
+      setTimeout(() => {
+        navigation.navigate('CartTab');
+      }, 1200);
+
+    } catch (e) {
+      setSheetResult({
+        added: 0, skipped: 0,
+        price_changes: [],
+        skipped_items: ['Failed to load order — please try again'],
       });
-    });
+    } finally {
+      setReorderingId(null);
+    }
+  }, [navigation]);
 
-    Alert.alert('Added to Cart', `${items.length} item${items.length !== 1 ? 's' : ''} added to your cart.`, [
-      { text: 'View Cart', onPress: () => navigation.navigate('HomeTab', { screen: 'CartTab' }) },
-      { text: 'OK' },
-    ]);
-  }, [addItem, navigation]);
+  const handleViewCart = useCallback(() => {
+    setSheetResult(null);
+    navigation.navigate('CartTab');
+  }, [navigation]);
 
-  const renderItem = useCallback(({ item: order }) => (
-    <OrderCard
-      order={order}
-      onPress={() => navigation.navigate('OrderTracking', { orderId: order.id })}
-      onReorder={() => handleReorder(order)}
-    />
-  ), [navigation, handleReorder]);
+  const renderItem = useCallback(({ item }) => {
+    if (item.type === 'basket') {
+      return (
+        <BasketCard
+          key={item.basketId}
+          basketId={item.basketId}
+          orders={item.orders}
+          onPressOrder={(orderId) => navigation.navigate('OrderTracking', { orderId })}
+        />
+      );
+    }
+    // Single-shop order (no basket_id)
+    return (
+      <OrderCard
+        order={item}
+        onPress={() => navigation.navigate('OrderTracking', { orderId: item.id })}
+        onReorder={() => handleReorder(item)}
+        reordering={reorderingId === item.id}
+      />
+    );
+  }, [navigation, handleReorder, reorderingId]);
 
   const renderFooter = () =>
     isFetchingNextPage ? <OrderCardSkeleton /> : null;
@@ -160,9 +459,12 @@ export default function OrderHistoryScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe} edges={['bottom']}>
+      {/* Success toast */}
+      <SuccessToast visible={toast.visible} message={toast.message} />
+
       <FlatList
-        data={orders}
-        keyExtractor={o => o.id}
+        data={listItems}
+        keyExtractor={item => item.key}
         renderItem={renderItem}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
@@ -170,33 +472,193 @@ export default function OrderHistoryScreen({ navigation }) {
         onEndReached={() => hasNextPage && fetchNextPage()}
         onEndReachedThreshold={0.3}
       />
+
+      {/* Reorder result bottom sheet */}
+      <ReorderSheet
+        result={sheetResult}
+        onViewCart={handleViewCart}
+        onClose={() => setSheetResult(null)}
+      />
     </SafeAreaView>
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
   list: { padding: Spacing[4], paddingBottom: Spacing[8] },
 
+  // Order card
   card: {
     backgroundColor: Colors.surface, borderRadius: BorderRadius.xl,
     padding: Spacing[4], marginBottom: Spacing[4], ...Shadow.md,
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: Spacing[3] },
-  orderNum:   { fontFamily: Typography.fontFamily.bold,    fontSize: Typography.size.md,  color: Colors.text },
-  orderTime:  { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs,  color: Colors.textSecondary, marginTop: 2 },
-  statusPill: { paddingHorizontal: Spacing[3], paddingVertical: Spacing[1], borderRadius: BorderRadius.full },
-  statusText: { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.xs, textTransform: 'capitalize' },
+  cardHeader:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: Spacing[3] },
+  orderNum:      { fontFamily: Typography.fontFamily.bold,    fontSize: Typography.size.md,  color: Colors.text },
+  orderTime:     { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs,  color: Colors.textSecondary, marginTop: 2 },
+  statusPill:    { paddingHorizontal: Spacing[3], paddingVertical: Spacing[1], borderRadius: BorderRadius.full },
+  statusText:    { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.xs, textTransform: 'capitalize' },
 
-  tierRow: { flexDirection: 'row', gap: Spacing[2], marginBottom: Spacing[2] },
-  tierPill: { backgroundColor: Colors.surface2, borderRadius: BorderRadius.full, paddingHorizontal: Spacing[3], paddingVertical: 3 },
-  tierPillText: { fontFamily: Typography.fontFamily.medium, fontSize: Typography.size.xs, color: Colors.textSecondary },
+  tierRow:       { flexDirection: 'row', gap: Spacing[2], marginBottom: Spacing[2] },
+  tierPill:      { backgroundColor: Colors.surface2, borderRadius: BorderRadius.full, paddingHorizontal: Spacing[3], paddingVertical: 3 },
+  tierPillText:  { fontFamily: Typography.fontFamily.medium, fontSize: Typography.size.xs, color: Colors.textSecondary },
 
-  itemPreview: { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.sm, color: Colors.textSecondary, marginBottom: 2 },
-  moreItems:   { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: Colors.textTertiary, marginBottom: Spacing[2] },
+  itemPreview:   { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.sm, color: Colors.textSecondary, marginBottom: 2 },
+  moreItems:     { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: Colors.textTertiary, marginBottom: Spacing[2] },
 
-  cardFooter:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: Spacing[3], borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: Spacing[3] },
-  total:        { fontFamily: Typography.fontFamily.bold,    fontSize: Typography.size.lg,  color: Colors.text },
-  reorderBtn:   { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.primaryLight, borderRadius: BorderRadius.full, paddingHorizontal: Spacing[4], paddingVertical: Spacing[2] },
-  reorderText:  { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.sm, color: Colors.primary },
+  cardFooter:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: Spacing[3], borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: Spacing[3] },
+  total:            { fontFamily: Typography.fontFamily.bold, fontSize: Typography.size.lg, color: Colors.text },
+  reorderBtn:       { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.primaryLight, borderRadius: BorderRadius.full, paddingHorizontal: Spacing[4], paddingVertical: Spacing[2] },
+  reorderBtnLoading:{ opacity: 0.65 },
+  reorderText:      { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.sm, color: Colors.primary },
+
+  // Toast
+  toast: {
+    position: 'absolute', top: Spacing[4], alignSelf: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.success, borderRadius: BorderRadius.full,
+    paddingHorizontal: Spacing[5], paddingVertical: Spacing[3],
+    zIndex: 100, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25, shadowRadius: 6, elevation: 8,
+  },
+  toastText: { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.sm, color: '#fff' },
+
+  // Bottom sheet
+  sheetOverlay:    { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: Spacing[5], paddingBottom: Spacing[8], paddingTop: Spacing[3],
+    maxHeight: '85%',
+  },
+  sheetHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: Colors.border, alignSelf: 'center', marginBottom: Spacing[4],
+  },
+  sheetHeader: { alignItems: 'center', marginBottom: Spacing[4] },
+  sheetIconWrap: {
+    width: 56, height: 56, borderRadius: 28,
+    justifyContent: 'center', alignItems: 'center', marginBottom: Spacing[3],
+  },
+  sheetTitle: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize:   Typography.size.lg,
+    color:      Colors.text,
+    textAlign:  'center',
+    marginBottom: Spacing[1],
+  },
+  sheetSub: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize:   Typography.size.sm,
+    color:      Colors.textSecondary,
+    textAlign:  'center',
+  },
+
+  // Price change warning
+  priceWarnBox: {
+    flexDirection:   'row', alignItems: 'flex-start', gap: 6,
+    backgroundColor: Colors.warningLight,
+    borderRadius:    10, padding: Spacing[3], marginBottom: Spacing[3],
+    borderLeftWidth: 3, borderLeftColor: Colors.warning,
+  },
+  priceWarnText: {
+    flex: 1,
+    fontFamily: Typography.fontFamily.medium,
+    fontSize:   Typography.size.sm,
+    color:      Colors.warning,
+  },
+
+  priceList:   { marginBottom: Spacing[3] },
+  priceRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: Spacing[2], borderBottomWidth: 1, borderBottomColor: Colors.border },
+  priceProduct:{ fontFamily: Typography.fontFamily.medium, fontSize: Typography.size.sm, color: Colors.text, flex: 1, marginRight: 8 },
+  priceValues: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  priceOld:    { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: Colors.textTertiary, textDecorationLine: 'line-through' },
+  priceNew:    { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.sm },
+
+  // Skipped items
+  skippedBox:  { backgroundColor: Colors.errorLight, borderRadius: 10, padding: Spacing[3], marginBottom: Spacing[4], borderLeftWidth: 3, borderLeftColor: Colors.error },
+  skippedLabel:{ fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.sm, color: Colors.error, marginBottom: Spacing[1] },
+  skippedItem: { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.sm, color: Colors.error, marginTop: 2 },
+
+  // Sheet CTAs
+  sheetCta: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.lg,
+    paddingVertical: Spacing[4], marginTop: Spacing[2],
+  },
+  sheetCtaText: { fontFamily: Typography.fontFamily.bold, fontSize: Typography.size.md, color: '#fff' },
+  sheetSecondary: { alignItems: 'center', paddingVertical: Spacing[3] },
+  sheetSecondaryText: { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.sm, color: Colors.textSecondary },
+
+  // ── P4-3B: Basket card styles ─────────────────────────────
+  basketCard: {
+    backgroundColor: Colors.surface,
+    borderRadius:    BorderRadius.xl,
+    overflow:        'hidden',
+    marginBottom:    Spacing[3],
+    ...Shadow.sm,
+    borderWidth:     1,
+    borderColor:     Colors.primary + '25',
+  },
+  basketHeader: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    padding:        Spacing[4],
+    gap:            Spacing[3],
+  },
+  basketIconWrap: {
+    width: 38, height: 38,
+    borderRadius: 10,
+    backgroundColor: Colors.primaryLight || '#FFF5EB',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  basketEmoji: { fontSize: 20 },
+  basketHeaderText: { flex: 1 },
+  basketTitle: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize:   Typography.size.base,
+    color:      Colors.text,
+    marginBottom: 2,
+  },
+  basketShops: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize:   Typography.size.xs,
+    color:      Colors.textSecondary,
+  },
+  basketHeaderRight: { alignItems: 'flex-end' },
+  basketTotal: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize:   Typography.size.md,
+    color:      Colors.text,
+  },
+  basketOrders: {
+    borderTopWidth: 1, borderTopColor: Colors.border,
+  },
+  basketOrderRow: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    justifyContent: 'space-between',
+    padding:        Spacing[4],
+    paddingVertical: Spacing[3],
+  },
+  basketOrderDivider: { borderBottomWidth: 1, borderBottomColor: Colors.border },
+  basketOrderLeft:  { flex: 1, marginRight: Spacing[3] },
+  basketOrderShop: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize:   Typography.size.sm,
+    color:      Colors.text,
+    marginBottom: 2,
+  },
+  basketOrderNum: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize:   Typography.size.xs,
+    color:      Colors.textSecondary,
+  },
+  basketOrderRight: { alignItems: 'flex-end' },
+  basketOrderTotal: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize:   Typography.size.sm,
+    color:      Colors.text,
+    marginBottom: 2,
+  },
 });

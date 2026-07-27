@@ -1,7 +1,67 @@
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
-// Root page — middleware handles the actual redirect based on role.
-// This is a fallback.
-export default function RootPage() {
-  redirect('/dashboard/orders');
+// Import marketing CSS (layout would normally do this, but layout.jsx
+// is in the (marketing) group and won't run when this file owns the route)
+import './(marketing)/marketing.css';
+
+// Marketing page component — rendered directly from app/page.jsx
+// so only one file owns the "/" route (avoids Next.js conflict/500)
+import MarketingPage from './(marketing)/page';
+
+// SEO metadata — must be here because app/page.jsx owns "/" not (marketing)/layout.jsx
+export const metadata = {
+  title:       'TezzNirmaan — Hardware & Building Materials, Delivered in Patna & Muzaffarpur',
+  description: 'Order cement, paint, tiles, plumbing, and electrical supplies from local shops in Patna and Muzaffarpur, Bihar. Delivered in 60–90 minutes or same day.',
+  keywords:    'hardware delivery Patna, hardware delivery Muzaffarpur, cement delivery Bihar, building materials Bihar, TezzNirmaan',
+  openGraph: {
+    title:       'TezzNirmaan — Hardware & Construction Delivered in 60 Minutes',
+    description: 'Order cement, paint, tiles, electrical fittings and more. Delivered from local shops in Patna & Muzaffarpur within 60–90 minutes.',
+    images: [{
+      url:    'https://tezznirmaan.in/og-image.png',
+      width:  1200,
+      height: 630,
+      alt:    'TezzNirmaan — Fast Hardware Delivery in Patna & Muzaffarpur',
+    }],
+    locale: 'en_IN',
+    type:   'website',
+  },
+  twitter: {
+    card:        'summary_large_image',
+    title:       'TezzNirmaan — Hardware Delivered in 60 Minutes',
+    description: 'Cement, paint, tiles & fittings from local shops in Patna & Muzaffarpur. Quick & Scheduled delivery.',
+    images:      ['https://tezznirmaan.in/og-image.png'],
+  },
+  robots: { index: true, follow: true },
+};
+
+function decodeJwt(token) {
+  try {
+    const payload = token.split('.')[1];
+    return JSON.parse(Buffer.from(payload, 'base64').toString('utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+// Root route handler — P3-A / P4-3A
+// Authenticated → redirect to role-appropriate dashboard
+// Unauthenticated → render marketing landing page
+export default async function RootPage() {
+  const cookieStore = cookies();
+  const token = cookieStore.get('tn_token')?.value;
+
+  if (token) {
+    const payload = decodeJwt(token);
+    if (payload) {
+      const role =
+        payload?.app_metadata?.role ||
+        payload?.user_metadata?.role ||
+        payload?.role;
+      if (role === 'rider') redirect('/rider');
+      redirect('/dashboard/orders');
+    }
+  }
+
+  return <MarketingPage />;
 }

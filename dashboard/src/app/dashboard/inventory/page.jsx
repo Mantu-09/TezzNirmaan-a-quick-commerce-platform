@@ -1,7 +1,9 @@
 'use client';
-import { useState } from 'react';
+import { useState, Suspense } from 'react'; // P4-2C: added Suspense
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { inventoryApi } from '../../../lib/api';
+import ImportCSVModal from '../../../components/inventory/ImportCSVModal'; // P1-D
+import { TableSkeleton } from '../../../components/skeletons'; // P4-2C
 
 // ── Inline editable cell ──────────────────────────────────────
 function EditableCell({ value, onSave, type = 'number', prefix = '' }) {
@@ -140,7 +142,9 @@ export default function InventoryPage() {
   const queryClient  = useQueryClient();
   const [search,     setSearch]     = useState('');
   const [showAdd,    setShowAdd]    = useState(false);
+  const [showImport, setShowImport] = useState(false); // P1-D
   const [toast,      setToast]      = useState('');
+  const [showLowStockOnly, setShowLowStockOnly] = useState(false); // P5-5A
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2500); };
 
@@ -150,8 +154,11 @@ export default function InventoryPage() {
     staleTime: 60 * 1000,
   });
 
-  const items = data?.inventory || [];
-  const lowStock = items.filter(i => i.stock_quantity < 5 && i.is_in_stock).length;
+  const allItems = data?.data?.inventory || [];
+  // P5-5A: use per-item low_stock_threshold (DB default 5) instead of hardcoded value
+  const lowStockItems = allItems.filter(i => i.stock_quantity <= (i.low_stock_threshold ?? 5) && i.stock_quantity >= 0);
+  const items = showLowStockOnly ? lowStockItems : allItems;
+  const lowStock = lowStockItems.length;
 
   const update = useMutation({
     mutationFn: ({ id, data }) => inventoryApi.updateItem(id, data),
@@ -189,6 +196,18 @@ export default function InventoryPage() {
         />
       )}
 
+      {/* P1-D: Import CSV Modal */}
+      {showImport && (
+        <ImportCSVModal
+          onClose={() => setShowImport(false)}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ['inventory'] });
+            showToast('✓ Import complete — inventory updated');
+            setShowImport(false);
+          }}
+        />
+      )}
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s5)' }}>
         <div>
@@ -202,23 +221,63 @@ export default function InventoryPage() {
             )}
           </p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
-          + Add Item
-        </button>
+        <div style={{ display: 'flex', gap: 'var(--s3)', alignItems: 'center' }}>
+          <button
+            style={{
+              padding: '9px 18px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+              border: '1px solid var(--border)', background: 'var(--surface-2)',
+              color: 'var(--text)', cursor: 'pointer',
+            }}
+            onClick={() => setShowImport(true)}
+          >
+            📥 Import CSV
+          </button>
+          <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
+            + Add Item
+          </button>
+        </div>
       </div>
 
-      {/* Search */}
-      <input
-        className="input"
-        placeholder="Search items…"
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        style={{ marginBottom: 'var(--s5)', maxWidth: 360 }}
-      />
+      {/* Search + Filter Tabs */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s3)', marginBottom: 'var(--s5)', flexWrap: 'wrap' }}>
+        <input
+          className="input"
+          placeholder="Search items…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ maxWidth: 320 }}
+        />
+        {/* P5-5A: Low Stock filter tabs */}
+        <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', marginLeft: 'auto' }}>
+          <button
+            style={{
+              padding: '8px 16px', fontSize: 13, fontWeight: 600, border: 'none',
+              background: !showLowStockOnly ? 'var(--primary)' : 'var(--surface-2)',
+              color:      !showLowStockOnly ? '#fff' : 'var(--text)',
+              cursor: 'pointer',
+            }}
+            onClick={() => setShowLowStockOnly(false)}
+          >
+            All ({allItems.length})
+          </button>
+          <button
+            style={{
+              padding: '8px 16px', fontSize: 13, fontWeight: 600, border: 'none',
+              borderLeft: '1px solid var(--border)',
+              background: showLowStockOnly ? '#DC2626' : 'var(--surface-2)',
+              color:      showLowStockOnly ? '#fff' : lowStock > 0 ? '#DC2626' : 'var(--text)',
+              cursor: 'pointer',
+            }}
+            onClick={() => setShowLowStockOnly(true)}
+          >
+            🔴 Low Stock {lowStock > 0 ? `(${lowStock})` : '(0)'}
+          </button>
+        </div>
+      </div>
 
       {/* Table */}
       <div className="table-wrap">
-        <table>
+        <table data-testid="inventory-table">
           <thead>
             <tr>
               <th>Item Name</th>
@@ -232,7 +291,8 @@ export default function InventoryPage() {
           </thead>
           <tbody>
             {isLoading ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>Loading…</td></tr>
+              // P4-2C: TableSkeleton replaces inline loading text
+              <tr><td colSpan={7} style={{ padding: 0 }}><TableSkeleton rows={8} cols={7} showHeader={false} /></td></tr>
             ) : items.length === 0 ? (
               <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
                 No items found. {search ? 'Try a different search.' : 'Add your first item →'}
@@ -267,8 +327,20 @@ export default function InventoryPage() {
                     value={item.stock_quantity}
                     onSave={(v) => update.mutate({ id: item.id, data: { stock_quantity: v } })}
                   />
-                  {item.stock_quantity < 5 && item.stock_quantity > 0 && (
-                    <span style={{ fontSize: 11, color: 'var(--warning)', marginLeft: 6 }}>Low</span>
+                  {/* P5-5A: use per-item threshold, sort low-stock rows to top */}
+                  {item.stock_quantity <= (item.low_stock_threshold ?? 5) && item.stock_quantity > 0 && (
+                    <span style={{
+                      display: 'inline-block', marginLeft: 6,
+                      background: '#FEF3C7', color: '#92400E',
+                      fontSize: 11, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                    }}>Low</span>
+                  )}
+                  {item.stock_quantity === 0 && (
+                    <span style={{
+                      display: 'inline-block', marginLeft: 6,
+                      background: '#FEE2E2', color: '#DC2626',
+                      fontSize: 11, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                    }}>OUT</span>
                   )}
                 </td>
                 <td>

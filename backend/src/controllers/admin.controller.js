@@ -6,6 +6,7 @@
 import { supabaseAdmin } from '../config/supabase.js';
 import { AppError, NotFoundError } from '../utils/errors.js';
 import * as smsService from '../services/sms.service.js';
+import { getPlatformAnalytics } from '../services/platform-analytics.service.js'; // P2-A
 import logger from '../utils/logger.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -81,6 +82,7 @@ export async function createShop(req, res, next) {
       pincode,
       lat,
       lng,
+      city_id,                          // P4-4A: optional explicit city link
       quick_delivery_radius_km     = 5,
       scheduled_delivery_radius_km = 15,
       operating_hours              = {},
@@ -138,6 +140,29 @@ export async function createShop(req, res, next) {
       throw new AppError('Profile creation failed: ' + profileErr.message, 500);
     }
 
+    // Resolve city link (P4-4A)
+    // If city_id provided, look up city centre coordinates.
+    // Falls back to matching by city name, then to null.
+    let resolvedCityId      = null;
+    let resolvedCityCenter  = {};
+
+    if (city_id) {
+      const { data: cityRow } = await supabaseAdmin
+        .from('cities').select('id, center_lat, center_lng').eq('id', city_id).single();
+      if (cityRow) {
+        resolvedCityId     = cityRow.id;
+        resolvedCityCenter = { city_center_lat: cityRow.center_lat, city_center_lng: cityRow.center_lng };
+      }
+    } else {
+      // Best-effort: match by city name so shops created without city_id still get a centre
+      const { data: cityRow } = await supabaseAdmin
+        .from('cities').select('id, center_lat, center_lng').ilike('name', city).limit(1).single();
+      if (cityRow) {
+        resolvedCityId     = cityRow.id;
+        resolvedCityCenter = { city_center_lat: cityRow.center_lat, city_center_lng: cityRow.center_lng };
+      }
+    }
+
     // 3. Insert shop row — PostGIS location uses WKT SRID notation
     const slug = makeSlug(shop_name);
     const { data: shop, error: shopErr } = await supabaseAdmin
@@ -158,6 +183,8 @@ export async function createShop(req, res, next) {
         operating_hours,
         is_active:           true,
         is_accepting_orders: false,  // disabled until owner completes setup
+        city_id:             resolvedCityId,
+        ...resolvedCityCenter,
       })
       .select()
       .single();
@@ -474,6 +501,7 @@ export async function assignRiderToShop(req, res, next) {
 
 // ── Analytics ─────────────────────────────────────────────────
 
+/** GET /admin/analytics/overview — lightweight overview (backwards compat) */
 export async function getAnalyticsOverview(req, res, next) {
   try {
     const [shops, orders, riders] = await Promise.all([
@@ -489,5 +517,81 @@ export async function getAnalyticsOverview(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/** GET /admin/analytics/platform?period=30d — P2-A full GMV dashboard */
+export async function getPlatformAnalyticsHandler(req, res, next) {
+  try {
+    const { period = '30d' } = req.query;
+    if (!['today', '7d', '30d'].includes(period)) {
+      return res.status(400).json({ success: false, message: 'period must be today | 7d | 30d' });
+    }
+    const data = await getPlatformAnalytics(period);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
 // Alias for backwards compatibility
 export const getDashboardOverview = getAnalyticsOverview;
+
+// ── Shop Interest Registrations (P4-1A) ─────────────────────
+
+export async function getShopInterests(req, res, next) {
+  try {
+    const {
+      page   = 1,
+      limit  = 25,
+      status,
+      city,
+    } = req.query;
+
+    const from = (page - 1) * limit;
+
+    let query = supabaseAdmin
+      .from('shop_interest_registrations')
+      .select('*', { count: 'exact' })
+      .order('submitted_at', { ascending: false })
+      .range(from, from + limit - 1);
+
+    if (status) query = query.eq('status', status);
+    if (city)   query = query.ilike('city', `%${city}%`);
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data:    data || [],
+      meta: {
+        page:       Number(page),
+        limit:      Number(limit),
+        total:      count || 0,
+        totalPages: Math.ceil((count || 0) / limit),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+export async function updateShopInterestStatus(req, res, next) {
+  try {
+    const { id }      = req.params;
+    const { status, notes } = req.body;
+
+    const VALID = ['new', 'contacted', 'onboarded', 'rejected'];
+    if (status && !VALID.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${VALID.join(', ')}` });
+    }
+
+    const updates = {};
+    if (status) updates.status = status;
+    if (notes  !== undefined) updates.notes = notes;
+
+    const { data, error } = await supabaseAdmin
+      .from('shop_interest_registrations')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}

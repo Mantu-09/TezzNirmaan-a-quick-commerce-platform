@@ -35,6 +35,27 @@ export async function placeOrder(payload) {
   return client.post('/orders', payload);
 }
 
+// ── P4-3B: Basket (multi-shop) ───────────────────────────────
+
+/** Preview a multi-shop basket — returns per-shop breakdown */
+export async function previewBasket(addressId) {
+  return client.post('/orders/basket/preview', { addressId });
+}
+
+/**
+ * Place a multi-shop basket order.
+ * @param {{ addressId, paymentMethod, notes?, promoCode? }} payload
+ */
+export async function placeBasketOrder(payload) {
+  return client.post('/orders/basket', payload);
+}
+
+/** Get basket detail (basket record + all child orders) */
+export async function getBasket(basketId) {
+  return client.get(`/orders/baskets/${basketId}`);
+}
+
+
 // ── Orders ───────────────────────────────────────────────────
 
 export async function getOrders(page = 1) {
@@ -47,6 +68,16 @@ export async function getOrder(orderId) {
 
 export async function cancelOrder(orderId, reason) {
   return client.post(`/orders/${orderId}/cancel`, { reason });
+}
+
+/** P2-D: Clears cart and repopulates with available items from a past order */
+export async function reorder(orderId) {
+  return client.post(`/orders/${orderId}/reorder`);
+}
+
+// P1-C: Validate a promo code before checkout
+export async function validatePromo(code, orderAmountPaise, tier = null) {
+  return client.post('/promos/validate', { code, order_amount_paise: orderAmountPaise, tier });
 }
 
 // ── Addresses ────────────────────────────────────────────────

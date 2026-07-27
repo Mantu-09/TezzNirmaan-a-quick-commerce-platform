@@ -1,4 +1,4 @@
-﻿/**
+/**
  * OtpScreen.jsx
  * ─────────────────────────────────────────────────────
  * Step 2 of the auth flow — user enters the 6-digit OTP
@@ -217,11 +217,12 @@ export default function OtpScreen({ route }) {
               </Text>
 
               {/* OTP boxes */}
-              <View style={styles.otpRow}>
+              <View style={styles.otpRow} testID="otp-input-row">
                 {digits.map((digit, index) => (
                   <TextInput
                     key={index}
                     ref={inputRefs.current[index]}
+                    testID={`otp-box-${index}`}
                     style={[
                       styles.otpBox,
                       digit         && styles.otpBoxFilled,
@@ -275,6 +276,7 @@ export default function OtpScreen({ route }) {
                 loading={loading}
                 onPress={handleVerify}
                 style={styles.ctaButton}
+                testID="verify-otp-btn"
               >
                 Verify OTP
               </Button>

@@ -169,6 +169,7 @@ export default function AdminShopsPage() {
           </button>
           <Link href="/admin/shops/new">
             <button
+              data-testid="add-shop-btn"
               style={{
                 background: 'var(--primary)',
                 color: '#fff',
@@ -328,7 +329,7 @@ export default function AdminShopsPage() {
 
         {/* Table */}
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table data-testid="shops-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 {['Shop Name', 'City', 'Owner Name', 'Owner Phone', 'Status', 'Created', 'Actions'].map(

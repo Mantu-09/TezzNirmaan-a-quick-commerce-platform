@@ -33,3 +33,9 @@ Thumbs.db
 
 # Metro bundler cache
 .metro-health-check*
+
+# P1-A: FCM / APNs credentials — NEVER commit these
+# Download from Firebase Console / Apple Developer Portal
+# and place them here manually before building.
+google-services.json
+GoogleService-Info.plist

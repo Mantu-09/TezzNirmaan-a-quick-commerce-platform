@@ -52,6 +52,15 @@ export async function rateOrder(orderId, customerId, { deliveryRating, productRa
     throw new AppError('Failed to save rating', 500);
   }
 
+  // P0-B: Trigger immediate materialized view refresh so the shop's aggregate
+  // rating is current without waiting for the pg_cron 15-minute schedule.
+  // Non-blocking — we fire-and-forget; a failure here does not fail the rating request.
+  supabaseAdmin.rpc('refresh_shop_ratings').then(({ error }) => {
+    if (error) {
+      logger.warn('refresh_shop_ratings RPC failed (non-fatal)', { error: error.message, shopId });
+    }
+  });
+
   return { rating };
 }
 

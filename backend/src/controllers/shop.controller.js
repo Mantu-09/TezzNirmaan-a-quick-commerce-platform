@@ -9,6 +9,7 @@ import * as orderService     from '../services/order.service.js';
 import * as inventoryService from '../services/inventory.service.js';
 import * as deliveryService  from '../services/delivery.service.js';
 import * as shopService      from '../services/shop.service.js';
+import { getCachedShopInventory } from '../services/cache.service.js'; // P2-C
 import { NotFoundError, AppError } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 
@@ -37,8 +38,14 @@ export async function getShopOrders(req, res, next) {
       .order('created_at', { ascending: false })
       .range(from, from + limit - 1);
 
-    if (status) query = query.eq('status', status);
-    if (tier)   query = query.eq('delivery_tier', tier);
+    if (status) {
+      const statuses = status.split(',').map(s => s.trim()).filter(Boolean);
+      query = statuses.length === 1
+        ? query.eq('status', statuses[0])
+        : query.in('status', statuses);
+    }
+    if (tier) query = query.eq('delivery_tier', tier);
+
 
     const { data, error, count } = await query;
     if (error) throw error;
@@ -229,13 +236,27 @@ export async function getInventory(req, res, next) {
 
     // Convert inStock string query param to boolean
     const inStockBool = inStock === 'true' ? true : inStock === 'false' ? false : undefined;
+    const pageNum     = page  ? +page  : 1;
+    const limitNum    = limit ? +limit : 20;
 
-    const result = await inventoryService.getInventory(shopId, {
-      search,
-      inStock: inStockBool,
-      page:    page ? +page : 1,
-      limit:   limit ? +limit : 20,
-    });
+    // P2-C: Cache only the default "show everything" fetch (page 1, no filter,
+    // no search). Filtered / searched / paginated requests skip the cache to
+    // avoid serving stale filtered views.
+    const isDefaultFetch = !search && inStockBool === undefined && pageNum === 1 && limitNum === 20;
+
+    let result;
+    if (isDefaultFetch) {
+      result = await getCachedShopInventory(shopId, () =>
+        inventoryService.getInventory(shopId, { page: 1, limit: 20 })
+      );
+    } else {
+      result = await inventoryService.getInventory(shopId, {
+        search,
+        inStock: inStockBool,
+        page:    pageNum,
+        limit:   limitNum,
+      });
+    }
 
     res.json({ success: true, data: result });
   } catch (err) {
@@ -450,3 +471,74 @@ export async function updateMyShop(req, res, next) {
   }
 }
 
+// ── P5-5C: Order Export — GET /shop/orders/export ─────────────
+// Returns a CSV file of orders in the requested date range.
+// Supports: ?from=YYYY-MM-DD&to=YYYY-MM-DD&format=csv
+// Scoped to the authenticated shop via requireShopAccess.
+//
+// CSV columns: Order #, Date, Items, Total (₹), Status, Payment
+// Row totals are in rupees (not paise) for easy accounting.
+export async function exportShopOrders(req, res, next) {
+  try {
+    const shopId = req.shopId;
+    const { from, to, format: fmt = 'csv' } = req.query;
+
+    if (!from || !to) {
+      return res.status(400).json({ success: false, message: '`from` and `to` query params are required (YYYY-MM-DD)' });
+    }
+
+    // Clamp range to 90 days to avoid timeout / OOM on huge shops
+    const fromDate = new Date(from);
+    const toDate   = new Date(to);
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      return res.status(400).json({ success: false, message: 'Invalid date format — use YYYY-MM-DD' });
+    }
+    const rangeMs = toDate.getTime() - fromDate.getTime();
+    if (rangeMs > 90 * 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ success: false, message: 'Date range cannot exceed 90 days' });
+    }
+
+    const { data: orders, error } = await supabaseAdmin
+      .from('orders')
+      .select(`
+        order_number, created_at, total_amount_paise, status, payment_method,
+        order_items(
+          quantity, unit_price,
+          products(name)
+        )
+      `)
+      .eq('shop_id', shopId)
+      .gte('created_at', fromDate.toISOString())
+      .lte('created_at', new Date(toDate.getTime() + 86400000).toISOString()) // inclusive end
+      .order('created_at', { ascending: false })
+      .limit(5000); // safety cap
+
+    if (error) throw error;
+
+    const rows = (orders || []).map(o => {
+      const itemStr = (o.order_items || [])
+        .map(i => `${i.products?.name || 'Item'} ×${i.quantity}`)
+        .join('; ');
+      // Quote fields that may contain commas
+      const quote = (s) => `"${String(s).replace(/"/g, '""')}"`;
+      return [
+        o.order_number,
+        new Date(o.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }),
+        quote(itemStr),
+        ((o.total_amount_paise || 0) / 100).toFixed(2),
+        o.status,
+        o.payment_method || 'cod',
+      ].join(',');
+    });
+
+    const csvHeader = 'Order #,Date,Items,Total (₹),Status,Payment';
+    const csv = [csvHeader, ...rows].join('\n');
+
+    const filename = `orders_${from}_to_${to}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send('\uFEFF' + csv); // UTF-8 BOM for Excel compatibility
+  } catch (err) {
+    next(err);
+  }
+}

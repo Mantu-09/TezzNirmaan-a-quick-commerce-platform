@@ -5,11 +5,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { getProduct } from '../../api/products';
 import { getShopRatingSummary } from '../../api/ratings';         // B4
 import TierBadge from '../../components/product/TierBadge';
+import ProductImage from '../../components/product/ProductImage'; // TD-05
 import Button from '../../components/common/Button';
 import { RatingBadge } from '../../components/common/StarRating'; // B4
 import { formatPaise, discountPercent, savingsAmount } from '../../utils/money';
@@ -89,12 +89,13 @@ export default function ProductDetailScreen({ route, navigation }) {
             }}
           >
             {images.map((img, i) => (
-              <Image
+              <ProductImage
                 key={i}
-                source={img || require('../../../assets/placeholder.png')}
+                uri={img}
                 style={[styles.carouselImage, { width: SCREEN_W }]}
                 contentFit="contain"
                 transition={150}
+                showSkeleton={i === imageIdx} // only shimmer the visible slide
               />
             ))}
           </ScrollView>

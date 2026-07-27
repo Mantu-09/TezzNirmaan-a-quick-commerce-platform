@@ -50,3 +50,31 @@ export async function searchProducts(params = {}) {
 export async function getSearchSuggestions(q, shopId = null) {
   return client.get('/search/suggestions', { params: { q, shopId } });
 }
+
+// ── AI Features (P5-2) ───────────────────────────────────────
+
+/**
+ * Personalised product recommendations for the logged-in user.
+ * @param {string} shopId
+ * @param {Array}  cartItems  [{ id, name }]
+ * @returns {{ recommendations: Array }}
+ */
+export async function getRecommendations(shopId, cartItems = []) {
+  const cartParam = cartItems.length
+    ? JSON.stringify(cartItems.map(i => ({ id: i.inventoryId || i.id, name: i.name })))
+    : undefined;
+  return client.get('/recommendations', {
+    params: { shop_id: shopId, ...(cartParam ? { cart_items: cartParam } : {}) },
+  });
+}
+
+/**
+ * Parse a natural-language / Hinglish query via Claude.
+ * Returns { parsed: { search_terms, category, delivery_tier, interpreted_as, ... } }
+ * @param {string} query
+ * @param {string} [shopId]
+ */
+export async function aiSearchParse(query, shopId = null) {
+  return client.post('/search/ai', { query, shop_id: shopId });
+}
+

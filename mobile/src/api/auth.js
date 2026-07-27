@@ -45,3 +45,12 @@ export async function getStoredSession() {
     return null;
   }
 }
+
+/**
+ * P1-A: Register this device's Expo push token with the backend.
+ * Called after push permission is granted on app launch.
+ * @param {string} expoPushToken  - "ExponentPushToken[xxxxxx]"
+ */
+export async function savePushToken(expoPushToken) {
+  return client.patch('/auth/push-token', { token: expoPushToken });
+}

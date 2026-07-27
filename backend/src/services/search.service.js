@@ -1,23 +1,26 @@
 // ────────────────────────────────────────────────────────────
-// Search Service — B3 (Corrected Schema)
+// Search Service — P6-5 (Typesense upgrade)
 //
-// Schema reality check:
-//   shop_inventory.price     = bigint in PAISE
-//   shop_inventory.mrp       = bigint in PAISE (nullable)
-//   shop_inventory.is_in_stock = generated boolean (stock_quantity > 0)
-//   shop_inventory.is_listed = boolean (visible to customer)
-//   products.images          = jsonb (array of URLs)
+// Strategy:
+//   1. If Typesense is configured AND available → use it (sub-50ms, typo-tolerant)
+//   2. If Typesense is unavailable (outage / not configured) → fall back to
+//      the existing PostgreSQL FTS path transparently
 //
-// Search strategy:
-//   1. ts_query + weighted tsvector (A=name, B=brand, C=category, D=desc)
-//   2. ILIKE trigram fallback for partial/short queries
-//   3. Unit-size parsing: "50kg" → filter unit='kg', size match
+// The fallback is automatic — no config flag needed. Typesense unavailability
+// is caught per-request and logged as a warning, not an error.
+//
+// Schema reality:
+//   shop_inventory.price  = bigint PAISE  (Typesense: int32)
+//   shop_inventory.mrp    = bigint PAISE  (Typesense: int32, optional)
+//   shop_inventory.is_in_stock = generated boolean
 // ────────────────────────────────────────────────────────────
-import { supabaseAdmin } from '../config/supabase.js';
-import logger from '../utils/logger.js';
-import { cacheGet, cacheSet } from '../config/redis.js'; // B7: Search result caching
+import { supabaseAdmin }     from '../config/supabase.js';
+import logger                from '../utils/logger.js';
+import { cacheGet, cacheSet } from '../config/redis.js';
+import * as aiService         from './ai.service.js';             // P5-2
+import { typesenseClient, isTypesenseEnabled } from '../lib/typesense.js'; // P6-5
 
-// ── Query preprocessing ──────────────────────────────────────
+// ── Unit-query parser (kept from B3) ─────────────────────────
 
 const UNIT_MAP = {
   kg: 'kg', kgs: 'kg', kilogram: 'kg', kilograms: 'kg',
@@ -32,9 +35,6 @@ const UNIT_MAP = {
   set: 'set', bundle: 'bundle',
 };
 
-/**
- * Parse "50kg" / "10 litre" queries. Extracts unit hint.
- */
 function parseUnitQuery(raw) {
   const trimmed = raw.trim();
   const match   = trimmed.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z.]+)$/);
@@ -46,192 +46,138 @@ function parseUnitQuery(raw) {
   return { sizeHint: null, unitHint: null, cleanQuery: trimmed };
 }
 
+// ── Sort field mapping ────────────────────────────────────────
 
-
-// ── Main search ──────────────────────────────────────────────
-
-/**
- * Search products in a shop's inventory.
- *
- * @param {string} query
- * @param {string|null} shopId   - null = search all shops (not recommended for prod)
- * @param {object} filters       - { category, tier, minPrice, maxPrice, inStock }
- * @param {string} sort          - 'relevance'|'price_asc'|'price_desc'|'newest'
- * @param {number} page          - 1-based
- * @param {number} limit
- */
-export async function searchProducts(
-  query,
-  shopId  = null,
-  filters = {},
-  sort    = 'relevance',
-  page    = 1,
-  limit   = 20
-) {
-  const { category, tier, minPrice, maxPrice, inStock } = filters;
-  const offset = (page - 1) * limit;
-
-  // B7: Cache key — deterministic hash of all search params
-  // 60s TTL: short enough for inventory changes, long enough to absorb
-  // users rapidly re-submitting the same search.
-  const cacheKey = `search:${shopId}:${query}:${JSON.stringify(filters)}:${sort}:${page}:${limit}`;
-  const cached = await cacheGet(cacheKey);
-  if (cached) {
-    try { return JSON.parse(cached); } catch { /* fall through to live query */ }
-  }
-
-  const { sizeHint, unitHint, cleanQuery } = parseUnitQuery(query || '');
-
-  let q = supabaseAdmin
-    .from('shop_inventory')
-    .select(`
-      id,
-      price,
-      mrp,
-      stock_quantity,
-      is_in_stock,
-      is_listed,
-      shop_id,
-      product_id,
-      products!inner(
-        id, name, slug, description, images,
-        delivery_tier, unit, weight_kg, is_bulk,
-        gst_percent, brand_name, category_name,
-        categories!category_id(id, name, slug),
-        brands!brand_id(id, name)
-      )
-    `, { count: 'exact' })
-    .eq('products.is_active', true)
-    .eq('is_listed', true)
-    .range(offset, offset + limit - 1);
-
-  // Shop scope
-  if (shopId) q = q.eq('shop_id', shopId);
-
-  // In-stock filter — use generated column
-  if (inStock === true || inStock === 'true' || inStock === '1') {
-    q = q.eq('is_in_stock', true);
-  }
-
-  // Price range (paise)
-  if (minPrice) q = q.gte('price', Math.round(+minPrice * 100));
-  if (maxPrice) q = q.lte('price', Math.round(+maxPrice * 100));
-
-  // Category filter
-  if (category) q = q.eq('products.category_id', category);
-
-  // Delivery tier filter
-  if (tier) q = q.eq('products.delivery_tier', tier);
-
-  // Unit filter from parsed query
-  if (unitHint) q = q.eq('products.unit', unitHint);
-
-  // ── Text search strategy ─────────────────────────────────
-  if (cleanQuery.length >= 3) {
-    // websearch type: PostgREST converts user query → tsquery automatically
-    // Supports partial words, phrases, negation. Safe for user input.
-    q = q.textSearch('products.search_vector', cleanQuery, { type: 'websearch', config: 'english' });
-  } else if (cleanQuery.length > 0) {
-    // Short query (1-2 chars) → ILIKE prefix on name (FTS is ineffective this short)
-    q = q.ilike('products.name', `${cleanQuery}%`);
-  }
-
-
-  // ── Sorting ──────────────────────────────────────────────
+function typesenseSortBy(sort) {
   switch (sort) {
-    case 'price_asc':  q = q.order('price', { ascending: true });  break;
-    case 'price_desc': q = q.order('price', { ascending: false }); break;
-    case 'newest':     q = q.order('created_at', { referencedTable: 'products', ascending: false }); break;
-    default:           q = q.order('updated_at', { ascending: false }); break; // proxy for relevance
+    case 'price_asc':  return 'price:asc';
+    case 'price_desc': return 'price:desc';
+    default:           return '_text_match:desc,price:asc'; // relevance → price
   }
+}
 
-  const { data, error, count } = await q;
+function postgresSortOrder(sort, q) {
+  switch (sort) {
+    case 'price_asc':  return q.order('price', { ascending: true });
+    case 'price_desc': return q.order('price', { ascending: false });
+    case 'newest':     return q.order('created_at', { referencedTable: 'products', ascending: false });
+    default:           return q.order('updated_at', { ascending: false });
+  }
+}
 
-  if (error) {
-    // FTS index not ready yet → fall back to ILIKE
-    if (error.message?.includes('search_vector') || error.code === '42703') {
-      logger.warn('FTS not available, using ILIKE fallback', { query, error: error.message });
-      return ilikeFallback(query, shopId, filters, sort, page, limit);
+// ── AI pre-processing (P5-2) ──────────────────────────────────
+
+async function applyAIPreprocessing(query, shopId, filters) {
+  const isNaturalLanguage = query.split(' ').length > 2 || /[^\x00-\x7F]/.test(query);
+  let processedQuery     = query;
+  let aiDerivedFilters   = {};
+  let aiInterpretedAs    = null;
+
+  if (isNaturalLanguage && process.env.ANTHROPIC_API_KEY) {
+    try {
+      const parsed = await aiService.parseNaturalLanguageSearch(query, shopId);
+      if (parsed.search_terms?.length) processedQuery = parsed.search_terms.join(' ');
+      if (!filters.category && parsed.category)      aiDerivedFilters.categoryName = parsed.category;
+      if (!filters.tier     && parsed.delivery_tier) aiDerivedFilters.tier         = parsed.delivery_tier;
+      aiInterpretedAs = parsed.interpreted_as || null;
+      logger.debug('AI search pre-processing', { original: query, processed: processedQuery });
+    } catch (aiErr) {
+      logger.warn('AI search pre-processing failed — using raw query', { error: aiErr.message });
     }
-    logger.error('searchProducts error', { error: error.message, query });
-    throw error;
   }
 
-  const results = (data || []).map(row => normaliseRow(row));
+  return { processedQuery, aiDerivedFilters, aiInterpretedAs };
+}
+
+// ════════════════════════════════════════════════════════════
+// ── Typesense search path ────────────────────────────────────
+// ════════════════════════════════════════════════════════════
+
+async function searchWithTypesense(processedQuery, shopId, mergedFilters, sort, page, limit) {
+  const { category, categoryName, tier, minPrice, maxPrice, inStock, city_id, unitHint } = mergedFilters;
+
+  // Build filter_by string
+  const filterParts = [];
+  if (shopId)      filterParts.push(`shop_id:=${shopId}`);
+  if (city_id)     filterParts.push(`city_id:=${city_id}`);
+  if (categoryName) filterParts.push(`category_name:=${categoryName}`);
+  if (tier)        filterParts.push(`delivery_tier:=${tier}`);
+  if (unitHint)    filterParts.push(`unit:=${unitHint}`);
+  if (inStock === true || inStock === 'true' || inStock === '1') {
+    filterParts.push('is_in_stock:=true');
+  }
+  if (minPrice)    filterParts.push(`price:>=${Math.round(+minPrice * 100)}`);
+  if (maxPrice)    filterParts.push(`price:<=${Math.round(+maxPrice * 100)}`);
+  filterParts.push('is_listed:=true');
+
+  const searchParams = {
+    q:                    processedQuery || '*',
+    query_by:             'name,brand_name,category_name,search_text',
+    query_by_weights:     '4,2,2,1',
+    filter_by:            filterParts.join(' && '),
+    sort_by:              typesenseSortBy(sort),
+    per_page:             limit,
+    page,
+    // Typo tolerance: allow up to 2 typos for queries longer than 4 chars
+    num_typos:            2,
+    typo_tokens_threshold: 1,
+    // Facets for the filter UI (category + tier breakdowns)
+    facet_by:             'category_name,delivery_tier',
+    max_facet_values:     20,
+    // Snippet highlighting for the search results UI
+    highlight_full_fields: 'name',
+    snippet_threshold:    30,
+  };
+
+  const result = await typesenseClient
+    .collections('products')
+    .documents()
+    .search(searchParams);
+
+  if (!result) throw new Error('Typesense returned null — not configured');
+
+  const results = (result.hits || []).map(hit => ({
+    inventoryId:  hit.document.id,
+    shopId:       hit.document.shop_id,
+    price:        hit.document.price,
+    mrp:          hit.document.mrp || null,
+    stockQty:     hit.document.stock_quantity,
+    isInStock:    hit.document.is_in_stock,
+    isListed:     hit.document.is_listed,
+    productId:    hit.document.product_id,
+    name:         hit.document.name,
+    brandName:    hit.document.brand_name || null,
+    categoryName: hit.document.category_name || null,
+    deliveryTier: hit.document.delivery_tier || null,
+    unit:         hit.document.unit || null,
+    shopName:     hit.document.shop_name || null,
+    // Highlighted name for the search results UI
+    highlight:    hit.highlights?.find(h => h.field === 'name')?.snippet || null,
+    _score:       hit.text_match,
+  }));
 
   return {
     results,
-    total:   count || 0,
-    page:    +page,
-    hasMore: offset + results.length < (count || 0),
+    total:          result.found,
+    page:           result.page,
+    hasMore:        result.found > page * limit,
+    facets:         result.facet_counts || [],
+    queryTimeMs:    result.search_time_ms,
+    searchEngine:   'typesense',
   };
 }
 
-// ── Autocomplete suggestions ─────────────────────────────────
-
-/**
- * Return up to `limit` product name suggestions for autocomplete.
- * Priorities: exact prefix first, then contains-match.
- * Target latency: < 50ms (uses b-tree index on name + LIMIT).
- */
-export async function getSuggestions(query, shopId = null, limit = 5) {
-  if (!query || query.trim().length < 1) return [];
-  const q = query.trim();
-
-  // Run prefix + contains in parallel
-  const buildBase = () => {
-    let base = supabaseAdmin
-      .from('products')
-      .select('id, name, unit, brand_name, delivery_tier, images')
-      .eq('is_active', true);
-    return base;
-  };
-
-  const [prefix, contains] = await Promise.all([
-    buildBase().ilike('name', `${q}%`).limit(limit),
-    buildBase().ilike('name', `%${q}%`).not('name', 'ilike', `${q}%`).limit(limit),
-  ]);
-
-  const seen  = new Set();
-  const items = [];
-  for (const row of [...(prefix.data || []), ...(contains.data || [])]) {
-    if (seen.has(row.id) || items.length >= limit) continue;
-    seen.add(row.id);
-    items.push({
-      id:           row.id,
-      name:         row.name,
-      unit:         row.unit,
-      brand:        row.brand_name || null,
-      deliveryTier: row.delivery_tier,
-      thumbnail:    Array.isArray(row.images) ? row.images[0] : (row.images?.[0] || null),
-    });
-  }
-  return items;
-}
-
-// ── Popular categories (empty state fallback) ────────────────
-
-export async function getPopularCategories(limit = 8) {
-  const { data, error } = await supabaseAdmin
-    .from('categories')
-    .select('id, name, slug, icon_url')
-    .eq('is_active', true)
-    .is('parent_id', null)
-    .order('sort_order', { ascending: true })
-    .limit(limit);
-  if (error) throw error;
-  return data || [];
-}
-
-// ── Helpers ──────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════
+// ── PostgreSQL FTS fallback (original B3 implementation) ─────
+// ════════════════════════════════════════════════════════════
 
 function normaliseRow(row) {
   const p = row.products || {};
   return {
     inventoryId:  row.id,
     shopId:       row.shop_id,
-    price:        row.price,       // paise
-    mrp:          row.mrp,         // paise, may be null
+    price:        row.price,
+    mrp:          row.mrp,
     stockQty:     row.stock_quantity,
     isInStock:    row.is_in_stock,
     isListed:     row.is_listed,
@@ -250,6 +196,67 @@ function normaliseRow(row) {
     categoryName: p.category_name || p.categories?.name || null,
     categoryId:   p.categories?.id || null,
     categorySlug: p.categories?.slug || null,
+    searchEngine: 'postgres',
+  };
+}
+
+async function searchWithPostgres(processedQuery, shopId, mergedFilters, sort, page, limit) {
+  const { category, categoryName, tier, minPrice, maxPrice, inStock, unitHint, cleanQuery } =
+    { ...mergedFilters, cleanQuery: mergedFilters._cleanQuery || processedQuery };
+
+  const offset = (page - 1) * limit;
+
+  let q = supabaseAdmin
+    .from('shop_inventory')
+    .select(`
+      id, price, mrp, stock_quantity, is_in_stock, is_listed, shop_id, product_id,
+      products!inner(
+        id, name, slug, description, images,
+        delivery_tier, unit, weight_kg, is_bulk,
+        gst_percent, brand_name, category_name,
+        categories!category_id(id, name, slug),
+        brands!brand_id(id, name)
+      )
+    `, { count: 'exact' })
+    .eq('products.is_active', true)
+    .eq('is_listed', true)
+    .range(offset, offset + limit - 1);
+
+  if (shopId)  q = q.eq('shop_id', shopId);
+  if (inStock === true || inStock === 'true' || inStock === '1') q = q.eq('is_in_stock', true);
+  if (minPrice) q = q.gte('price', Math.round(+minPrice * 100));
+  if (maxPrice) q = q.lte('price', Math.round(+maxPrice * 100));
+  if (category)     q = q.eq('products.category_id',   category);
+  if (categoryName) q = q.eq('products.category_name', categoryName);
+  if (tier)     q = q.eq('products.delivery_tier', tier);
+  if (unitHint) q = q.eq('products.unit', unitHint);
+
+  if ((cleanQuery || '').length >= 3) {
+    q = q.textSearch('products.search_vector', cleanQuery, { type: 'websearch', config: 'english' });
+  } else if ((cleanQuery || '').length > 0) {
+    q = q.ilike('products.name', `${cleanQuery}%`);
+  }
+
+  q = postgresSortOrder(sort, q);
+
+  const { data, error, count } = await q;
+
+  if (error) {
+    if (error.message?.includes('search_vector') || error.code === '42703') {
+      // FTS index not ready → ILIKE fallback
+      logger.warn('FTS not available, using ILIKE fallback', { error: error.message });
+      return ilikeFallback(processedQuery, shopId, mergedFilters, sort, page, limit);
+    }
+    throw error;
+  }
+
+  const results = (data || []).map(normaliseRow);
+  return {
+    results,
+    total:   count || 0,
+    page:    +page,
+    hasMore: offset + results.length < (count || 0),
+    searchEngine: 'postgres',
   };
 }
 
@@ -282,11 +289,155 @@ async function ilikeFallback(query, shopId, filters, sort, page, limit) {
   const { data, error, count } = await q;
   if (error) throw error;
   const results = (data || []).map(normaliseRow);
-  const result  = { results, total: count || 0, page: +page, hasMore: offset + results.length < (count || 0) };
-
-  // B7: Cache result for 60 seconds (TTL is intentionally short — inventory changes frequently)
-  await cacheSet(cacheKey, result, 60);
-
-  return result;
+  return { results, total: count || 0, page: +page, hasMore: offset + results.length < (count || 0), searchEngine: 'ilike' };
 }
 
+// ════════════════════════════════════════════════════════════
+// ── Public API ───────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════
+
+/**
+ * Search products with automatic Typesense → Postgres → ILIKE fallback.
+ *
+ * @param {string}      query
+ * @param {string|null} shopId   — null = search all shops
+ * @param {object}      filters  — { category, tier, minPrice, maxPrice, inStock, city_id }
+ * @param {string}      sort     — 'relevance'|'price_asc'|'price_desc'|'newest'
+ * @param {number}      page     — 1-based
+ * @param {number}      limit
+ */
+export async function searchProducts(
+  query,
+  shopId  = null,
+  filters = {},
+  sort    = 'relevance',
+  page    = 1,
+  limit   = 20
+) {
+  let processedQuery   = query || '';
+  let aiDerivedFilters = {};
+  let aiInterpretedAs  = null;
+
+  // P5-2: AI pre-processing (Hinglish / natural language)
+  if (processedQuery) {
+    ({ processedQuery, aiDerivedFilters, aiInterpretedAs } =
+      await applyAIPreprocessing(processedQuery, shopId, filters));
+  }
+
+  const mergedFilters = { ...aiDerivedFilters, ...filters };
+
+  // Unit parsing (e.g. "50kg" → unitHint='kg')
+  const { unitHint, cleanQuery } = parseUnitQuery(processedQuery);
+  mergedFilters.unitHint   = unitHint;
+  mergedFilters._cleanQuery = cleanQuery;
+
+  // B7: Redis cache key (post-AI so NL queries share cache with clean equivalents)
+  const cacheKey = `search:v2:${shopId}:${processedQuery}:${JSON.stringify(mergedFilters)}:${sort}:${page}:${limit}`;
+  const cached   = await cacheGet(cacheKey);
+  if (cached) {
+    try { return JSON.parse(cached); } catch { /* fall through */ }
+  }
+
+  let payload;
+
+  // ── Typesense path ────────────────────────────────────────
+  if (isTypesenseEnabled()) {
+    try {
+      payload = await searchWithTypesense(processedQuery, shopId, mergedFilters, sort, page, limit);
+    } catch (tsErr) {
+      logger.warn('Typesense search failed — falling back to Postgres FTS', { error: tsErr.message });
+      payload = await searchWithPostgres(processedQuery, shopId, mergedFilters, sort, page, limit);
+    }
+  } else {
+    // ── Postgres FTS path ──────────────────────────────────
+    payload = await searchWithPostgres(processedQuery, shopId, mergedFilters, sort, page, limit);
+  }
+
+  // Attach AI metadata
+  payload.interpretedAs = aiInterpretedAs || null;
+  payload.isAiSearch    = !!aiInterpretedAs;
+
+  // Cache for 60 seconds
+  await cacheSet(cacheKey, JSON.stringify(payload), 60);
+  return payload;
+}
+
+// ── Autocomplete suggestions (unchanged from B3) ─────────────
+
+export async function getSuggestions(query, shopId = null, limit = 5) {
+  if (!query || query.trim().length < 1) return [];
+  const q = query.trim();
+
+  // If Typesense available: use it for instant suggestions with typo tolerance
+  if (isTypesenseEnabled()) {
+    try {
+      const result = await typesenseClient
+        .collections('products')
+        .documents()
+        .search({
+          q,
+          query_by:     'name,brand_name',
+          query_by_weights: '4,1',
+          filter_by:    shopId ? `shop_id:=${shopId} && is_listed:=true` : 'is_listed:=true',
+          per_page:     limit,
+          page:         1,
+          num_typos:    1,
+        });
+
+      if (result) {
+        return (result.hits || []).map(hit => ({
+          id:           hit.document.product_id,
+          name:         hit.document.name,
+          unit:         hit.document.unit || null,
+          brand:        hit.document.brand_name || null,
+          deliveryTier: hit.document.delivery_tier || null,
+          thumbnail:    null, // Typesense doesn't store image URLs; caller can enrich if needed
+        }));
+      }
+    } catch (tsErr) {
+      logger.warn('Typesense suggestion failed — using Postgres ILIKE', { error: tsErr.message });
+    }
+  }
+
+  // Postgres fallback
+  const buildBase = () =>
+    supabaseAdmin
+      .from('products')
+      .select('id, name, unit, brand_name, delivery_tier, images')
+      .eq('is_active', true);
+
+  const [prefix, contains] = await Promise.all([
+    buildBase().ilike('name', `${q}%`).limit(limit),
+    buildBase().ilike('name', `%${q}%`).not('name', 'ilike', `${q}%`).limit(limit),
+  ]);
+
+  const seen  = new Set();
+  const items = [];
+  for (const row of [...(prefix.data || []), ...(contains.data || [])]) {
+    if (seen.has(row.id) || items.length >= limit) continue;
+    seen.add(row.id);
+    items.push({
+      id:           row.id,
+      name:         row.name,
+      unit:         row.unit,
+      brand:        row.brand_name || null,
+      deliveryTier: row.delivery_tier,
+      thumbnail:    Array.isArray(row.images) ? row.images[0] : null,
+    });
+  }
+  return items;
+}
+
+// ── Popular categories ────────────────────────────────────────
+
+export async function getPopularCategories(limit = 8) {
+  const { data, error } = await supabaseAdmin
+    .from('categories')
+    .select('id, name, slug, icon_url')
+    .eq('is_active', true)
+    .is('parent_id', null)
+    .order('sort_order', { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return data || [];
+}

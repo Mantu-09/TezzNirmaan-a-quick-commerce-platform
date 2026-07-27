@@ -47,12 +47,27 @@ export const placeOrderSchema = z.object({
     PAYMENT_METHODS.WALLET,
   ]),
   notes: z.string().max(500).optional(),
+  promoCode: z.string().min(1).max(30).optional(), // P1-C
   scheduledSlot: z
     .object({
       start: z.string().datetime(),
       end: z.string().datetime(),
     })
     .optional(),
+});
+
+/** POST /orders/basket — P4-3B: Multi-shop checkout */
+export const placeBasketOrderSchema = z.object({
+  addressId:     z.string().uuid(),
+  paymentMethod: z.enum([
+    PAYMENT_METHODS.UPI,
+    PAYMENT_METHODS.COD,
+    PAYMENT_METHODS.CARD,
+    PAYMENT_METHODS.NETBANKING,
+    PAYMENT_METHODS.WALLET,
+  ]),
+  notes:     z.string().max(500).optional(),
+  promoCode: z.string().min(1).max(30).optional(),
 });
 
 /** POST /orders/:orderId/cancel */
@@ -154,4 +169,35 @@ export const rateOrderSchema = z.object({
   data => data.delivery_rating != null || data.product_rating != null,
   { message: 'At least one of delivery_rating or product_rating is required' }
 );
+
+// ── P6-3: Returns ─────────────────────────────────────────────
+
+const RETURN_REASONS = [
+  'wrong_item_delivered',
+  'damaged_item',
+  'quality_not_as_described',
+  'quantity_short',
+  'item_missing',
+  'other',
+];
+
+/** POST /customer/orders/sub/:subOrderId/return */
+export const requestReturnSchema = z.object({
+  reason:      z.enum(RETURN_REASONS),
+  description: z.string().max(1000).optional(),
+  // Supabase Storage public URLs uploaded by the client before calling this endpoint
+  photoUrls:   z.array(z.string().url()).max(5).default([]),
+});
+
+/** PATCH /shop/returns/:returnId/approve */
+export const approveReturnSchema = z.object({
+  refundAmountPaise: z.number().int().positive(),
+  refundMethod: z.enum(['wallet', 'original_payment_method']),
+});
+
+/** PATCH /shop/returns/:returnId/reject */
+export const rejectReturnSchema = z.object({
+  rejectionReason: z.string().min(5).max(500),
+});
+
 

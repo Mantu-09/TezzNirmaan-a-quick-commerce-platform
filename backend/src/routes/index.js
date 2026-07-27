@@ -8,6 +8,7 @@ import shopRoutes     from './shop.routes.js';
 import riderRoutes    from './rider.routes.js';
 import adminRoutes    from './admin.routes.js';
 import paymentRoutes  from './payment.routes.js';
+import publicRoutes   from './public.routes.js';   // P4-1A: marketing funnel, no auth
 
 const router = Router();
 
@@ -19,5 +20,6 @@ router.use('/', shopRoutes);
 router.use('/', riderRoutes);
 router.use('/', adminRoutes);
 router.use('/', paymentRoutes);
+router.use('/', publicRoutes);   // P4-1A: /public/* — no auth required
 
 export default router;

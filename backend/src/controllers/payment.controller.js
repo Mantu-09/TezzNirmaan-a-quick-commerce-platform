@@ -6,6 +6,11 @@ import crypto from 'crypto';
 import { razorpay } from '../config/razorpay.js';
 import { supabaseAdmin } from '../config/supabase.js';
 import { PaymentError, NotFoundError } from '../utils/errors.js';
+import * as paymentService from '../services/payment.service.js'; // P1-B
+import * as notificationService from '../services/notification.service.js'; // P1-B
+import * as returnService from '../services/return.service.js'; // P6-3
+import logger from '../utils/logger.js';
+
 
 export async function createRazorpayOrder(req, res, next) {
   try {
@@ -130,7 +135,55 @@ export async function handleWebhook(req, res, next) {
         break;
       }
       case 'refund.created': {
-        // TODO: Update payment status to 'refund_initiated', store refund amount
+        // Razorpay has accepted the refund and it's now being processed.
+        // Our refund row was already inserted by payment.service.initiateRefund().
+        // Update with the Razorpay refund ID if it arrived via webhook rather than API response.
+        const rfndEntity = payload.refund?.entity;
+        if (rfndEntity?.id && rfndEntity?.payment_id) {
+          await supabaseAdmin
+            .from('refunds')
+            .update({ razorpay_refund_id: rfndEntity.id })
+            .eq('razorpay_payment_id', rfndEntity.payment_id)
+            .is('razorpay_refund_id', null); // only update if not already set
+          logger.info('webhook: refund.created', { razorpayRefundId: rfndEntity.id });
+        }
+        break;
+      }
+      case 'refund.processed': {
+        // Razorpay has successfully completed the refund — money is back to customer.
+        const rfndEntity = payload.refund?.entity;
+        if (!rfndEntity?.id) break;
+
+        // 1. Mark refund as processed in DB
+        await paymentService.markRefundProcessed(rfndEntity.id);
+
+        // 2. P6-3: If this refund was created by a return request, mark the return as refunded
+        returnService.markReturnRefunded(rfndEntity.id).catch(err =>
+          logger.warn('webhook: markReturnRefunded failed', { razorpayRefundId: rfndEntity.id, err: err.message })
+        );
+
+        // 3. Find the order to notify the customer
+        const refundRecord = await paymentService.getRefundByRazorpayId(rfndEntity.id);
+        if (refundRecord) {
+          // Look up order to get customer_id and order_number
+          const { data: orderRow } = await supabaseAdmin
+            .from('orders')
+            .select('id, order_number, customer_id')
+            .eq('id', refundRecord.order_id)
+            .single();
+
+          if (orderRow) {
+            const amountRupees = (refundRecord.amount_paise / 100).toFixed(2);
+            notificationService.notifyRefundProcessed(
+              orderRow.customer_id,
+              orderRow.order_number,
+              orderRow.id,
+              amountRupees
+            );
+          }
+        }
+
+        logger.info('webhook: refund.processed', { razorpayRefundId: rfndEntity.id });
         break;
       }
       default:

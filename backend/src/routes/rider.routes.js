@@ -19,15 +19,23 @@ const router = Router();
 const riderOnly = [authenticate, requireRole('rider')];
 
 // ── Deliveries ────────────────────────────────────────────
-router.get ('/rider/deliveries',                        ...riderOnly, validate(deliveriesQuerySchema, 'query'), c.getDeliveries);
-router.get ('/rider/deliveries/:assignmentId',          ...riderOnly, c.getDeliveryDetail);
-router.post('/rider/deliveries/:assignmentId/accept',   ...riderOnly, c.acceptDelivery);
-router.post('/rider/deliveries/:assignmentId/pickup',   ...riderOnly, c.confirmPickup);
-router.post('/rider/deliveries/:assignmentId/deliver',  ...riderOnly, validate(confirmDeliverySchema), c.confirmDelivery);
-router.post('/rider/deliveries/:assignmentId/cancel',   ...riderOnly, validate(cancelDeliverySchema), c.cancelDelivery);
+router.get ('/rider/deliveries',                           ...riderOnly, validate(deliveriesQuerySchema, 'query'), c.getDeliveries);
+// P3-B: Must be before /:assignmentId to avoid Express treating 'optimized-route' as a param
+router.get ('/rider/deliveries/optimized-route',           ...riderOnly, c.getOptimizedRoute);
+router.get ('/rider/deliveries/:assignmentId',             ...riderOnly, c.getDeliveryDetail);
+router.post('/rider/deliveries/:assignmentId/accept',      ...riderOnly, c.acceptDelivery);
+router.post('/rider/deliveries/:assignmentId/pickup',      ...riderOnly, c.confirmPickup);
+router.post('/rider/deliveries/:assignmentId/deliver',     ...riderOnly, validate(confirmDeliverySchema), c.confirmDelivery);
+router.post('/rider/deliveries/:assignmentId/cancel',      ...riderOnly, validate(cancelDeliverySchema), c.cancelDelivery);
+
 
 // ── Rider Status & Location ───────────────────────────────
 router.patch('/rider/status',   ...riderOnly, validate(updateRiderStatusSchema), c.updateStatus);
 router.post ('/rider/location', ...riderOnly, validate(updateLocationSchema), c.updateLocation);
+
+// ── Earnings (P2-B / P6-4) ───────────────────────────────────
+router.get('/rider/earnings',         ...riderOnly, c.getEarnings);
+// Paginated payout history — separate endpoint for infinite scroll
+router.get('/rider/earnings/history', ...riderOnly, c.getEarningsHistory);
 
 export default router;

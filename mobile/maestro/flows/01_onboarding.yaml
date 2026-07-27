@@ -1,0 +1,64 @@
+# ──────────────────────────────────────────────────────────────
+# Flow 01: Onboarding — Phone number entry + OTP verification
+#
+# Pre-conditions:
+#   • App built and installed on device/simulator
+#   • Backend ENV: TEST_OTP=123456 (bypass SMS; see backend/src/services/auth.service.js)
+#   • Test phone 9876543210 seeded (or backend accepts any number in dev mode)
+#
+# Verified against source:
+#   • PhoneScreen.jsx  → heading: "Enter your mobile number", button: "Send OTP"
+#   • OtpScreen.jsx    → heading: "Verify OTP", button: "Verify OTP"
+#   • OTP boxes carry testID: otp-box-0 … otp-box-5
+# ──────────────────────────────────────────────────────────────
+
+appId: in.tezznirmaan.app
+---
+# 1. Launch the app with a clean state (simulates a fresh install)
+- launchApp:
+    clearState: true
+
+# 2. The PhoneScreen should appear
+- assertVisible: "Enter your mobile number"
+- assertVisible: "Send OTP"
+
+# 3. Tap the phone input and type the test number
+- tapOn:
+    id: phone-input
+- inputText: "9876543210"
+
+# 4. Send OTP
+- tapOn:
+    id: send-otp-btn
+
+# 5. OTP screen appears
+- assertVisible: "Verify OTP"
+- assertVisible: "Enter the 6-digit code"
+
+# 6. Enter OTP digit-by-digit into individual boxes
+#    (Maestro taps the first box, then each successive box auto-advances)
+- tapOn:
+    id: otp-box-0
+- inputText: "1"
+- tapOn:
+    id: otp-box-1
+- inputText: "2"
+- tapOn:
+    id: otp-box-2
+- inputText: "3"
+- tapOn:
+    id: otp-box-3
+- inputText: "4"
+- tapOn:
+    id: otp-box-4
+- inputText: "5"
+- tapOn:
+    id: otp-box-5
+- inputText: "6"
+
+# 7. Verify OTP
+- tapOn:
+    id: verify-otp-btn
+
+# 8. Successful auth lands on Home tab (tab label "Home" or header "TezzNirmaan")
+- assertVisible: "TezzNirmaan"

@@ -7,14 +7,48 @@ import Cookies from 'js-cookie';
 
 const BASE = '/api/backend';
 
-async function request(method, path, data = null) {
-  const token = Cookies.get('tn_token');
+/** Build query string, omitting undefined/null values */
+function qs(params = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+  );
+  const str = new URLSearchParams(clean).toString();
+  return str ? `?${str}` : '';
+}
+
+let _isRefreshing = false;
+let _refreshQueue = [];
+
+async function refreshAccessToken() {
+  const refreshToken = Cookies.get('tn_refresh');
+  if (!refreshToken) throw new Error('No refresh token');
+
+  const res = await fetch(`${BASE}/auth/refresh`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ refresh_token: refreshToken }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error('Refresh failed');
+
+  const { access_token, refresh_token: newRefresh } = json.data?.session || {};
+  if (access_token) {
+    Cookies.set('tn_token',   access_token, { expires: 7, sameSite: 'strict' });
+  }
+  if (newRefresh) {
+    Cookies.set('tn_refresh', newRefresh,   { expires: 30, sameSite: 'strict' });
+  }
+  return access_token;
+}
+
+async function request(method, path, data = null, _retry = false) {
+  const token  = Cookies.get('tn_token');
   const shopId = Cookies.get('tn_shop_id');
 
   const headers = {
     'Content-Type': 'application/json',
-    ...(token   && { Authorization: `Bearer ${token}` }),
-    ...(shopId  && { 'X-Shop-Id': shopId }),
+    ...(token  && { Authorization: `Bearer ${token}` }),
+    ...(shopId && { 'X-Shop-Id': shopId }),
   };
 
   const init = {
@@ -24,8 +58,36 @@ async function request(method, path, data = null) {
     ...(data && { body: JSON.stringify(data) }),
   };
 
-  const res = await fetch(`${BASE}${path}`, init);
+  const res  = await fetch(`${BASE}${path}`, init);
   const json = await res.json().catch(() => ({}));
+
+  // ── Auto-refresh on 401 (token expired) ──────────────────────
+  if (res.status === 401 && !_retry) {
+    if (!_isRefreshing) {
+      _isRefreshing = true;
+      try {
+        await refreshAccessToken();
+        _refreshQueue.forEach(r => r());
+      } catch {
+        _refreshQueue.forEach(r => r(new Error('Session expired')));
+        Cookies.remove('tn_token');
+        Cookies.remove('tn_refresh');
+        Cookies.remove('tn_shop_id');
+        if (typeof window !== 'undefined') window.location.href = '/login';
+        throw new Error('Session expired — please log in again');
+      } finally {
+        _isRefreshing = false;
+        _refreshQueue = [];
+      }
+    } else {
+      // Queue concurrent requests while refresh is in-flight
+      await new Promise((resolve, reject) =>
+        _refreshQueue.push(err => err ? reject(err) : resolve())
+      );
+    }
+    // Retry with new token
+    return request(method, path, data, true);
+  }
 
   if (!res.ok) {
     const error = new Error(json.message || json.error || `HTTP ${res.status}`);
@@ -47,35 +109,68 @@ export const api = {
 
 // ── Auth ──────────────────────────────────────────────────────
 export const authApi = {
-  requestOtp: (phone)        => api.post('/auth/otp/request', { phone }),
-  verifyOtp:  (phone, otp)   => api.post('/auth/otp/verify',  { phone, otp }),
-  getProfile: ()             => api.get('/profile'),
+  // Staff (shop_owner / rider / platform_admin) — phone + password
+  staffLogin: (phone, password)  => api.post('/auth/staff/login', { phone, password }),
+  // Customer OTP (mobile app only)
+  requestOtp: (phone)            => api.post('/auth/otp/request', { phone }),
+  verifyOtp:  (phone, otp)       => api.post('/auth/otp/verify',  { phone, otp }),
+  getProfile: ()                 => api.get('/profile'),
 };
 
 // ── Shop Orders ───────────────────────────────────────────────
 export const ordersApi = {
-  getShopOrders:   (params = {}) => {
-    const qs = new URLSearchParams(params).toString();
-    return api.get(`/shop/orders${qs ? `?${qs}` : ''}`);
-  },
+  getShopOrders:   (params = {}) => api.get(`/shop/orders${qs(params)}`),
   getSubOrder:     (id)          => api.get(`/shop/orders/${id}`),
   confirmOrder:    (id)          => api.post(`/shop/orders/${id}/confirm`),
   rejectOrder:     (id, reason)  => api.post(`/shop/orders/${id}/reject`, { reason }),
   markPreparing:   (id)          => api.post(`/shop/orders/${id}/preparing`),
   markReady:       (id)          => api.post(`/shop/orders/${id}/ready`),
   assignRider:     (id, riderId) => api.post(`/shop/orders/${id}/assign-rider`, { rider_id: riderId }),
+
+  // P5-5C: CSV export — returns a URL string for browser download
+  // Uses window.open() rather than fetch() so the browser saves the file.
+  exportCsvUrl:    (from, to)    => {
+    const token  = typeof window !== 'undefined' ? document.cookie.match(/tn_token=([^;]+)/)?.[1] : '';
+    const shopId = typeof window !== 'undefined' ? document.cookie.match(/tn_shop_id=([^;]+)/)?.[1] : '';
+    return `${BASE}/shop/orders/export${qs({ from, to, format: 'csv' })}`;
+  },
 };
 
 // ── Inventory ─────────────────────────────────────────────────
 export const inventoryApi = {
-  getInventory:       (params = {}) => {
-    const qs = new URLSearchParams(params).toString();
-    return api.get(`/shop/inventory${qs ? `?${qs}` : ''}`);
-  },
+  getInventory:       (params = {}) => api.get(`/shop/inventory${qs(params)}`),
   updateItem:         (id, data)    => api.patch(`/shop/inventory/${id}`, data),
   addItem:            (data)        => api.post('/shop/inventory', data),
   bulkUpdate:         (items)       => api.patch('/shop/inventory/bulk-update', { items }),
   removeItem:         (id)          => api.delete(`/shop/inventory/${id}`),
+
+  // P1-D: CSV bulk upload — sends multipart/form-data, NOT JSON
+  bulkUpload: async (file) => {
+    const token  = Cookies.get('tn_token');
+    const shopId = Cookies.get('tn_shop_id');
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${BASE}/shop/inventory/bulk-upload`, {
+      method: 'POST',
+      headers: {
+        ...(token  && { Authorization: `Bearer ${token}` }),
+        ...(shopId && { 'X-Shop-Id': shopId }),
+        // Note: do NOT set Content-Type here — browser sets it with boundary
+      },
+      credentials: 'include',
+      body: formData,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const error = new Error(json.message || json.error || `HTTP ${res.status}`);
+      error.status = res.status;
+      throw error;
+    }
+    return json;
+  },
+
+  // P1-D: Download CSV template
+  downloadTemplate: () => `${BASE}/shop/inventory/bulk-template`,
 };
 
 // ── Shop Settings ─────────────────────────────────────────────
@@ -98,8 +193,9 @@ export const riderApi = {
 
 // ── Analytics ─────────────────────────────────────────────────
 export const analyticsApi = {
-  getOverview:        ()               => api.get('/admin/analytics/overview'),
-  getShopAnalytics:   (period = '7d')  => api.get(`/shop/analytics?period=${period}`),  // B5
+  getOverview:            ()               => api.get('/admin/analytics/overview'),
+  getShopAnalytics:       (period = '7d')  => api.get(`/shop/analytics?period=${period}`),  // B5
+  getPlatformAnalytics:   (period = '30d') => api.get(`/admin/analytics/platform?period=${period}`), // P2-A
 };
 
 // ── Notifications (B1) ───────────────────────────────────────
@@ -147,4 +243,35 @@ export const slotsApi = {
   // Shop-owner: day view of bookings
   getBookings:    (date)            => api.get(`/shop/slots/bookings?date=${date}`),
 };
+
+// ── AI Intelligence (P5-2) ────────────────────────────────────
+export const aiApi = {
+  // GET /shop/demand-forecast?days=7 — owner-only, 30-min cache
+  getDemandForecast: (days = 7) => api.get(`/shop/demand-forecast?days=${days}`),
+};
+
+// ── P6-3: Returns ─────────────────────────────────────────────
+export const returnsApi = {
+  /** List return requests for the authenticated shop. */
+  getReturns: (params = {}) => api.get(`/shop/returns${qs(params)}`),
+
+  /** Get a single return request detail. */
+  getReturn: (id) => api.get(`/shop/returns/${id}`),
+
+  /**
+   * Approve a return and initiate a refund.
+   * @param {string} id
+   * @param {{ refundAmountPaise: number, refundMethod: 'wallet'|'original_payment_method' }} body
+   */
+  approve: (id, body) => api.patch(`/shop/returns/${id}/approve`, body),
+
+  /**
+   * Reject a return with a reason.
+   * @param {string} id
+   * @param {{ rejectionReason: string }} body
+   */
+  reject: (id, body) => api.patch(`/shop/returns/${id}/reject`, body),
+};
+
+
 

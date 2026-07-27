@@ -1,0 +1,5 @@
+# e2e/.auth/ — Playwright saved auth state
+# These contain session tokens — NEVER commit them
+/dashboard/e2e/.auth/
+/dashboard/playwright-report/
+/dashboard/test-results/

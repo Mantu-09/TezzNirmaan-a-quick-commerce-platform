@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator,
+  Alert, ActivityIndicator, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from '@tanstack/react-query';
@@ -11,6 +11,8 @@ import Constants from 'expo-constants';
 import { format, addDays } from 'date-fns';
 import * as ordersApi from '../../api/orders';
 import { getAvailableSlots } from '../../api/slots';      // B6
+import { getWallet } from '../../api/wallet';             // P3-C
+import { getCheckoutBenefits } from '../../api/b2b';      // P6-6
 import Button from '../../components/common/Button';
 import { formatPaise } from '../../utils/money';
 import { formatSlot, getTomorrowSlots } from '../../utils/date';
@@ -20,7 +22,8 @@ import useAuthStore from '../../store/authStore';
 
 const RAZORPAY_KEY = Constants.expoConfig?.extra?.razorpayKeyId || process.env.EXPO_PUBLIC_RAZORPAY_KEY_ID;
 
-const PAYMENT_METHODS = [
+// P3-C: wallet payment methods are injected dynamically after wallet balance is fetched
+const BASE_PAYMENT_METHODS = [
   { id: 'upi',  label: 'UPI / PhonePe / GPay', icon: 'phone-portrait-outline' },
   { id: 'card', label: 'Credit / Debit Card',  icon: 'card-outline'           },
   { id: 'cod',  label: 'Cash on Delivery',      icon: 'cash-outline'           },
@@ -35,15 +38,31 @@ function deliveryFee(tier, subtotal) {
   return 0;
 }
 
-export default function CheckoutScreen({ navigation }) {
+export default function CheckoutScreen({ navigation, route }) {
   const { user }       = useAuthStore();
-  const { items, quickItems, scheduledItems, hasBothTiers, clearCart } = useCartStore();
+  const { items, quickItems, scheduledItems, hasBothTiers, isMultiShop, shopIds, clearCart } = useCartStore();
+
+  // P1-C: Promo code passed from CartScreen
+  const promoCode = route?.params?.promoCode || null;
 
   const [selectedAddressId, setSelectedAddressId] = useState(null);
   const [selectedSlot,      setSelectedSlot]      = useState(null);
   const [paymentMethod,     setPaymentMethod]     = useState('upi');
   const [placingOrder,      setPlacingOrder]      = useState(false);
   const [slotDate,          setSlotDate]          = useState(null); // 'YYYY-MM-DD'
+  // P6-6: B2B contractor fields
+  const [poNumber,          setPoNumber]          = useState('');
+  const [wantGstInvoice,    setWantGstInvoice]    = useState(false);
+  const [useCredit,         setUseCredit]         = useState(false);
+
+  // TD-10: Guard against empty cart checkout.
+  // If the user lands here with no items (e.g., after placing an order,
+  // deep-linking, or session restore), redirect back to Cart immediately.
+  useEffect(() => {
+    if (items.length === 0) {
+      navigation.replace('Cart');
+    }
+  }, [items.length, navigation]);
 
   // Determine shop from first scheduled item (all items share one shop in TezzNirmaan)
   const shopId = items[0]?.shopId;
@@ -60,7 +79,44 @@ export default function CheckoutScreen({ navigation }) {
   const schedSubtotal = scheduledItems.reduce((s, i) => s + i.unitPricePaise * i.quantity, 0);
   const quickFee      = quickItems.length     ? deliveryFee('quick',     quickSubtotal) : 0;
   const schedFee      = scheduledItems.length ? deliveryFee('scheduled', schedSubtotal) : 0;
-  const grandTotal    = quickSubtotal + schedSubtotal + quickFee + schedFee;
+  const grandTotalBeforePromo = quickSubtotal + schedSubtotal + quickFee + schedFee;
+
+  // P6-6: Fetch B2B contractor benefits for this order total (fires when total > 0)
+  const { data: b2bData } = useQuery({
+    queryKey: ['b2b-benefits', grandTotalBeforePromo],
+    queryFn:  () => getCheckoutBenefits(grandTotalBeforePromo),
+    enabled:  grandTotalBeforePromo > 0,
+    staleTime: 5 * 60 * 1000,
+  });
+  const b2bBenefits  = b2bData || {};
+  const isContractor = b2bBenefits.isContractor === true;
+  const b2bDiscount  = isContractor ? (b2bBenefits.discountPaise || 0) : 0;
+  // P1-C: Discount is server-confirmed; we show an optimistic preview here only.
+  // P6-6: B2B discount is also optimistic — server re-validates via contractor profile.
+  const grandTotal = Math.max(0, grandTotalBeforePromo - b2bDiscount); // server will apply real discount
+
+  // P3-C: Fetch wallet balance for the current user
+  const { data: walletData } = useQuery({
+    queryKey: ['wallet'],
+    queryFn:  () => getWallet(5),   // only need balance, not full history
+    staleTime: 30 * 1000,
+  });
+  const walletBalance    = walletData?.balance_paise || 0;
+  const walletCoverage   = Math.min(walletBalance, grandTotal);
+  const walletCoversAll  = walletCoverage >= grandTotal;
+  const afterWallet      = Math.max(0, grandTotal - walletCoverage);
+
+  // Build dynamic payment methods list
+  const PAYMENT_METHODS = [
+    ...(walletBalance > 0 ? [{
+      id:    'wallet',
+      label: walletCoversAll
+        ? `TezzWallet  (${formatPaise(walletBalance)} — covers full order)`
+        : `TezzWallet  (${formatPaise(walletBalance)} — covers ${formatPaise(walletCoverage)})`,
+      icon:  'wallet-outline',
+    }] : []),
+    ...BASE_PAYMENT_METHODS,
+  ];
 
   // Fetch saved addresses
   const { data: addrData, isLoading: addrLoading } = useQuery({
@@ -101,36 +157,67 @@ export default function CheckoutScreen({ navigation }) {
 
     setPlacingOrder(true);
     try {
-      const orderRes = await ordersApi.placeOrder({
-        addressId:     selectedAddressId,
-        paymentMethod,
-        // B6: pass slot as ISO datetimes so backend can create slot booking
-        scheduledSlot: selectedSlot
-          ? {
-              start: `${activeSlotDate}T${selectedSlot.start_time}:00`,
-              end:   `${activeSlotDate}T${selectedSlot.end_time}:00`,
-            }
-          : undefined,
-      });
+      const walletCoversAllNow = walletBalance >= grandTotal;
+      const effectivePaymentMethod =
+        paymentMethod === 'wallet' && !walletCoversAllNow
+          ? 'wallet_partial'
+          : paymentMethod;
 
-      const orderId = orderRes?.order?.id || orderRes?.orderId;
-      // A9b: Use server-confirmed total, never locally computed grandTotal.
-      // orderRes.totalAmountPaise comes from the backend's placeOrder response.
-      const serverAmountPaise = orderRes?.totalAmountPaise || orderRes?.total_amount_paise || grandTotal;
+      let orderRes;
+
+      if (isMultiShop) {
+        orderRes = await ordersApi.placeBasketOrder({
+          addressId:     selectedAddressId,
+          paymentMethod: useCredit ? 'credit' : effectivePaymentMethod,
+          promoCode:     promoCode || undefined,
+          // P6-6: B2B fields
+          poNumber:        poNumber || undefined,
+          wantGstInvoice:  wantGstInvoice,
+        });
+      } else {
+        orderRes = await ordersApi.placeOrder({
+          addressId:     selectedAddressId,
+          paymentMethod: useCredit ? 'credit' : effectivePaymentMethod,
+          promoCode:     promoCode || undefined,
+          wallet_amount_paise:
+            paymentMethod === 'wallet' && !walletCoversAllNow
+              ? walletBalance
+              : undefined,
+          scheduledSlot: selectedSlot
+            ? {
+                start: `${activeSlotDate}T${selectedSlot.start_time}:00`,
+                end:   `${activeSlotDate}T${selectedSlot.end_time}:00`,
+              }
+            : undefined,
+          // P6-6: B2B fields
+          poNumber:       poNumber || undefined,
+          wantGstInvoice: wantGstInvoice,
+        });
+      }
+
+      // For baskets, orderId is the first shop order; basketId is the grouping key
+      const orderId   = orderRes?.orders?.[0]?.orderId || orderRes?.orderId || orderRes?.order?.id;
+      const basketId  = orderRes?.basketId || null;
+      const serverAmountPaise = orderRes?.basketTotalPaise || orderRes?.totalAmountPaise || orderRes?.total_amount_paise || grandTotal;
 
       // Online payment — open Razorpay native checkout
-      if (paymentMethod !== 'cod' && orderRes?.razorpayOrderId) {
+      if (
+        paymentMethod !== 'cod' &&
+        paymentMethod !== 'wallet' &&
+        paymentMethod !== 'wallet_partial' &&
+        orderRes?.razorpayOrderId
+      ) {
         await new Promise((resolve, reject) => {
           RazorpayCheckout.open({
-            description:  'TezzNirmaan Order',
+            description:  basketId ? `TezzNirmaan — ${shopIds?.length || 1} shops` : 'TezzNirmaan Order',
             image:        'https://your-logo-url.com/logo.png',
             currency:     'INR',
             key:          RAZORPAY_KEY,
-            amount:       serverAmountPaise,   // server-confirmed, not client-computed
+            amount:       serverAmountPaise,
             name:         'TezzNirmaan',
             order_id:     orderRes.razorpayOrderId,
             prefill: {
-              email: user?.email || '',
+              email:   user?.email || '',
               contact: user?.phone || '',
               name:    user?.full_name || '',
             },
@@ -148,7 +235,7 @@ export default function CheckoutScreen({ navigation }) {
       }
 
       clearCart();
-      navigation.replace('OrderConfirmation', { orderId });
+      navigation.replace('OrderConfirmation', { orderId, basketId, orders: orderRes?.orders || null });
     } catch (e) {
       Alert.alert('Order failed', e.message || 'Something went wrong. Please try again.');
     } finally {
@@ -292,14 +379,44 @@ export default function CheckoutScreen({ navigation }) {
         {/* ── Step 3: Payment ──────────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>💳 Payment Method</Text>
+
+          {/* P3-C: Wallet balance info strip (shown when wallet has funds) */}
+          {walletBalance > 0 && (
+            <View style={styles.walletInfoStrip}>
+              <Ionicons name="wallet" size={16} color={Colors.secondary} />
+              <Text style={styles.walletInfoText}>
+                TezzWallet: <Text style={{ fontFamily: Typography.fontFamily.bold }}>{formatPaise(walletBalance)}</Text>
+                {walletCoversAll
+                  ? ' — fully covers this order'
+                  : ` — covers ${formatPaise(walletCoverage)} of this order`
+                }
+              </Text>
+            </View>
+          )}
+
           {PAYMENT_METHODS.map((m) => (
             <TouchableOpacity
               key={m.id}
-              style={[styles.payCard, paymentMethod === m.id && styles.payCardSelected]}
+              style={[styles.payCard, paymentMethod === m.id && styles.payCardSelected,
+                m.id === 'wallet' && styles.payCardWallet]}
               onPress={() => setPaymentMethod(m.id)}
+              accessibilityLabel={`Pay with ${m.label}`}
             >
               <Ionicons name={m.icon} size={20} color={paymentMethod === m.id ? Colors.primary : Colors.textSecondary} />
-              <Text style={[styles.payLabel, paymentMethod === m.id && styles.payLabelSelected]}>{m.label}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.payLabel, paymentMethod === m.id && styles.payLabelSelected]}>
+                  {m.id === 'wallet' ? 'TezzWallet' : m.label}
+                </Text>
+                {/* Wallet sub-label: show balance and coverage */}
+                {m.id === 'wallet' && (
+                  <Text style={styles.walletSubLabel}>
+                    {walletCoversAll
+                      ? `₹0 remaining after wallet`
+                      : `${formatPaise(afterWallet)} via UPI after wallet`
+                    }
+                  </Text>
+                )}
+              </View>
               {paymentMethod === m.id
                 ? <Ionicons name="radio-button-on"  size={20} color={Colors.primary} />
                 : <Ionicons name="radio-button-off" size={20} color={Colors.textTertiary} />
@@ -311,6 +428,15 @@ export default function CheckoutScreen({ navigation }) {
         {/* ── Step 4: Order Summary ─────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>🧾 Order Summary</Text>
+          {/* P1-C: Promo applied badge */}
+          {promoCode && (
+            <View style={styles.promoAppliedBadge}>
+              <Ionicons name="pricetag" size={14} color={Colors.success || '#16a34a'} />
+              <Text style={styles.promoAppliedText}>
+                Promo <Text style={{ fontFamily: Typography.fontFamily.bold }}>{promoCode}</Text> applied
+              </Text>
+            </View>
+          )}
           <View style={styles.summaryBox}>
             {quickItems.length > 0 && (
               <View style={styles.tierRow}>
@@ -324,12 +450,78 @@ export default function CheckoutScreen({ navigation }) {
                 <Text style={styles.tierValue}>{formatPaise(schedSubtotal + schedFee)}</Text>
               </View>
             )}
+            {/* P6-6: Business discount row */}
+            {isContractor && b2bDiscount > 0 && (
+              <View style={styles.tierRow}>
+                <Text style={[styles.tierLabel, { color: Colors.success }]}>
+                  🏢 Business discount ({b2bBenefits.discountPercent}%)
+                </Text>
+                <Text style={[styles.tierValue, { color: Colors.success }]}>−{formatPaise(b2bDiscount)}</Text>
+              </View>
+            )}
             <View style={[styles.tierRow, styles.grandRow]}>
               <Text style={styles.grandLabel}>Grand Total</Text>
               <Text style={styles.grandValue}>{formatPaise(grandTotal)}</Text>
             </View>
           </View>
         </View>
+
+        {/* ── Step 5: B2B Options (contractors only) ───────── */}
+        {isContractor && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>🏢 Business Options</Text>
+            <View style={styles.b2bCard}>
+              {/* Credit payment option */}
+              {b2bBenefits.creditAvailablePaise > 0 && (
+                <TouchableOpacity
+                  style={styles.b2bToggleRow}
+                  onPress={() => { setUseCredit(v => !v); if (!useCredit) setPaymentMethod('upi'); }}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.b2bToggleLabel}>Pay on Credit</Text>
+                    <Text style={styles.b2bToggleSub}>
+                      Due {b2bBenefits.paymentTermsDays} days after delivery · Available: {formatPaise(b2bBenefits.creditAvailablePaise)}
+                    </Text>
+                  </View>
+                  <View style={[styles.toggle, useCredit && styles.toggleOn]}>
+                    <View style={[styles.toggleThumb, useCredit && styles.toggleThumbOn]} />
+                  </View>
+                </TouchableOpacity>
+              )}
+
+              {/* GST Invoice toggle */}
+              <TouchableOpacity
+                style={[styles.b2bToggleRow, { marginTop: Spacing[3] }]}
+                onPress={() => setWantGstInvoice(v => !v)}
+                activeOpacity={0.7}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.b2bToggleLabel}>Generate GST Invoice</Text>
+                  <Text style={styles.b2bToggleSub}>
+                    {b2bBenefits.gstNumber ? `GSTIN: ${b2bBenefits.gstNumber}` : 'Invoice will be emailed within 24h'}
+                  </Text>
+                </View>
+                <View style={[styles.toggle, wantGstInvoice && styles.toggleOn]}>
+                  <View style={[styles.toggleThumb, wantGstInvoice && styles.toggleThumbOn]} />
+                </View>
+              </TouchableOpacity>
+
+              {/* PO Number */}
+              <View style={{ marginTop: Spacing[3] }}>
+                <Text style={styles.b2bToggleLabel}>PO Number <Text style={styles.b2bOptional}>(optional)</Text></Text>
+                <TextInput
+                  style={styles.poInput}
+                  value={poNumber}
+                  onChangeText={setPoNumber}
+                  placeholder="Purchase Order number"
+                  placeholderTextColor={Colors.textTertiary}
+                  autoCapitalize="characters"
+                />
+              </View>
+            </View>
+          </View>
+        )}
 
         <View style={{ height: 100 }} />
       </ScrollView>
@@ -348,7 +540,14 @@ export default function CheckoutScreen({ navigation }) {
           onPress={handlePlaceOrder}
           style={{ flex: 1, marginLeft: Spacing[4] }}
         >
-          {paymentMethod === 'cod' ? 'Place Order' : 'Pay & Order'}
+          {paymentMethod === 'cod'
+            ? 'Place Order'
+            : paymentMethod === 'wallet' && walletCoversAll
+            ? 'Pay with Wallet'
+            : paymentMethod === 'wallet'
+            ? `Wallet + Pay ${formatPaise(afterWallet)}`
+            : 'Pay & Order'
+          }
         </Button>
       </View>
     </SafeAreaView>
@@ -422,8 +621,31 @@ const styles = StyleSheet.create({
     marginBottom: Spacing[3],
   },
   payCardSelected: { borderColor: Colors.primary, backgroundColor: Colors.primaryLight },
+  // P3-C: wallet card gets a subtle secondary (navy) tint
+  payCardWallet: { borderColor: Colors.secondary + '40' },
   payLabel:        { flex: 1, fontFamily: Typography.fontFamily.medium, fontSize: Typography.size.base, color: Colors.text },
   payLabelSelected:{ color: Colors.primary },
+  walletSubLabel: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize:   Typography.size.xs,
+    color:      Colors.textSecondary,
+    marginTop:  2,
+  },
+  // P3-C: wallet info strip above payment methods
+  walletInfoStrip: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing[2],
+    backgroundColor: Colors.secondaryLight,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing[3],
+    marginBottom: Spacing[3],
+    borderWidth: 1, borderColor: Colors.secondary + '30',
+  },
+  walletInfoText: {
+    flex: 1,
+    fontFamily: Typography.fontFamily.regular,
+    fontSize:   Typography.size.sm,
+    color:      Colors.secondary,
+  },
 
   summaryBox: { backgroundColor: Colors.surface, borderRadius: BorderRadius.xl, padding: Spacing[4], ...Shadow.sm },
   tierRow:    { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: Spacing[2] },
@@ -432,6 +654,17 @@ const styles = StyleSheet.create({
   grandRow:   { borderTopWidth: 1, borderTopColor: Colors.border, marginTop: Spacing[2], paddingTop: Spacing[3] },
   grandLabel: { fontFamily: Typography.fontFamily.bold, fontSize: Typography.size.md, color: Colors.text },
   grandValue: { fontFamily: Typography.fontFamily.bold, fontSize: Typography.size.lg, color: Colors.text },
+  // P1-C
+  promoAppliedBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing[2],
+    backgroundColor: (Colors.successLight || '#f0fdf4'), borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing[3], paddingVertical: Spacing[2], marginBottom: Spacing[3],
+    borderWidth: 1, borderColor: (Colors.success || '#16a34a') + '40',
+  },
+  promoAppliedText: {
+    fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.sm,
+    color: Colors.success || '#16a34a',
+  },
 
   footer: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
@@ -441,4 +674,57 @@ const styles = StyleSheet.create({
   },
   footerTotal: { fontFamily: Typography.fontFamily.bold, fontSize: Typography.size.lg, color: Colors.text },
   footerItems: { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: Colors.textSecondary },
+  b2bCard: {
+    backgroundColor: Colors.secondaryLight,
+    borderRadius:    BorderRadius.xl,
+    padding:         Spacing[4],
+    borderWidth:     1,
+    borderColor:     Colors.secondary + '25',
+  },
+  b2bToggleRow: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    gap:            Spacing[3],
+  },
+  b2bToggleLabel: {
+    fontFamily:   Typography.fontFamily.semiBold,
+    fontSize:     Typography.size.sm,
+    color:        Colors.text,
+    marginBottom: 2,
+  },
+  b2bToggleSub: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize:   Typography.size.xs,
+    color:      Colors.textSecondary,
+  },
+  b2bOptional: {
+    fontFamily: Typography.fontFamily.regular,
+    color:      Colors.textTertiary,
+    fontSize:   Typography.size.xs,
+  },
+  poInput: {
+    borderWidth:  1.5,
+    borderColor:  Colors.border,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing[3],
+    paddingVertical:   Spacing[2],
+    fontFamily:   Typography.fontFamily.regular,
+    fontSize:     Typography.size.sm,
+    color:        Colors.text,
+    backgroundColor: Colors.surface,
+    marginTop:    Spacing[2],
+  },
+  // Toggle switch
+  toggle: {
+    width: 44, height: 24, borderRadius: 12,
+    backgroundColor: Colors.border,
+    justifyContent: 'center',
+    padding: 2,
+  },
+  toggleOn: { backgroundColor: Colors.secondary },
+  toggleThumb: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: '#fff',
+  },
+  toggleThumbOn: { alignSelf: 'flex-end' },
 });

@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { analyticsApi } from '../../../lib/api';
+import AIInsightsCard from '../../../components/AIInsightsCard'; // P5-5B
 
 // ── Formatting helpers ────────────────────────────────────────
 const fmt = {
@@ -336,7 +337,7 @@ export default function AnalyticsPage() {
   ];
 
   return (
-    <div style={{ padding: 'var(--s6)', fontFamily: 'var(--font)', maxWidth: 1100 }}>
+    <div data-testid="analytics-content" style={{ padding: 'var(--s6)', fontFamily: 'var(--font)', maxWidth: 1100 }}>
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s5)' }}>
@@ -452,7 +453,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* ── Row 4: Top products + Low stock ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s4)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s4)', marginBottom: 'var(--s5)' }}>
         <Card
           title="Top 5 products"
           action={
@@ -479,6 +480,11 @@ export default function AnalyticsPage() {
             : <LowStockTable data={data?.lowStockAlerts} />
           }
         </Card>
+      </div>
+
+      {/* ── Row 5: AI Insights (P5-5B) — full width ── */}
+      <div style={{ marginBottom: 'var(--s5)' }}>
+        <AIInsightsCard />
       </div>
 
       <style>{`

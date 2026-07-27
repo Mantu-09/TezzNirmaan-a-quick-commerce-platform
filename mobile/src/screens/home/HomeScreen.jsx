@@ -3,20 +3,115 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   ScrollView, RefreshControl, TextInput,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useQuery } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
-import { getNearbyShops, getCategories, getProducts } from '../../api/products';
-import ProductCard from '../../components/product/ProductCard';
+import { SafeAreaView }    from 'react-native-safe-area-context';
+import { useQuery }        from '@tanstack/react-query';
+import { Ionicons }        from '@expo/vector-icons';
+import { Image }           from 'expo-image';
+import { getNearbyShops, getCategories, getProducts, getRecommendations } from '../../api/products'; // P5-2
+import ProductCard         from '../../components/product/ProductCard';
 import { ProductCardSkeleton, CategoryGridSkeleton } from '../../components/common/SkeletonLoader';
-import EmptyState from '../../components/common/EmptyState';
+import EmptyState          from '../../components/common/EmptyState';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
-import useCartStore from '../../store/cartStore';
+import useCartStore        from '../../store/cartStore';
+import useCityStore        from '../../store/cityStore'; // P4-4A
+import useAuthStore        from '../../store/authStore'; // P5-2
 
-// Default Patna coordinates — will be replaced with user location in V2
-const DEFAULT_LAT = 25.5941;
-const DEFAULT_LNG = 85.1376;
+// Default Patna coordinates — used only if cityStore hasn't loaded yet (first render)
+// P4-4A: actual coords come from useCityStore() so multi-city works automatically
+const FALLBACK_LAT = 25.5941;
+const FALLBACK_LNG = 85.1376;
+
+// ── RecommendationsSection (P5-2) ────────────────────────────
+// Horizontally scrollable list of AI-recommended products.
+// Design: 180px wide cards with a left-border accent in --tn-orange.
+// The section is invisible (null) when:
+//   a) user is not logged in
+//   b) ANTHROPIC_API_KEY not set on backend (returns empty [])
+//   c) user has no order history yet
+function RecommendedCard({ item, onPress }) {
+  const priceRs = Math.round((item.price || 0) / 100);
+  return (
+    <TouchableOpacity style={styles.recCard} onPress={onPress} activeOpacity={0.88}>
+      {/* Left accent border */}
+      <View style={styles.recAccent} />
+      {/* Product image */}
+      <View style={styles.recImg}>
+        {item.thumbnail
+          ? <Image source={{ uri: item.thumbnail }} style={StyleSheet.absoluteFill} contentFit="cover" />
+          : <Text style={{ fontSize: 28 }}>🏗️</Text>}
+      </View>
+      {/* Info */}
+      <View style={styles.recInfo}>
+        <Text style={styles.recName} numberOfLines={2}>{item.name}</Text>
+        <Text style={styles.recPrice}>₹{priceRs.toLocaleString('en-IN')}</Text>
+        {item.deliveryTier === 'quick' && (
+          <View style={styles.recTierBadge}>
+            <Text style={styles.recTierText}>⚡ Quick</Text>
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function RecommendationsSection({ shopId, cartItems, navigation, shopObj }) {
+  const isLoggedIn = useAuthStore(s => s.isAuthenticated);
+  const { data, isLoading } = useQuery({
+    queryKey:  ['ai-recommendations', shopId, cartItems?.map(i => i.inventoryId).join(',')],
+    queryFn:   () => getRecommendations(shopId, cartItems || []),
+    staleTime: 5 * 60 * 1000,  // 5 min — matches server-side cache TTL
+    enabled:   !!shopId && isLoggedIn,
+  });
+
+  const recommendations = data?.recommendations || [];
+
+  if (!isLoggedIn) return null;
+  if (isLoading) {
+    // Skeleton: 3 shimmer cards
+    return (
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>✨ Recommended for you</Text>
+        <Text style={styles.sectionSub}>Based on your orders</Text>
+        <FlatList
+          horizontal
+          data={[1, 2, 3]}
+          keyExtractor={i => String(i)}
+          renderItem={() => <View style={[styles.recCard, styles.recCardSkeleton]} />}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: Spacing[4], gap: Spacing[3] }}
+        />
+      </View>
+    );
+  }
+  if (!recommendations.length) return null;
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>✨ Recommended for you</Text>
+          <Text style={styles.sectionSub}>Based on your orders</Text>
+        </View>
+      </View>
+      <FlatList
+        horizontal
+        data={recommendations}
+        keyExtractor={item => item.inventoryId || item.productId}
+        renderItem={({ item }) => (
+          <RecommendedCard
+            item={item}
+            onPress={() => shopObj && navigation.navigate('ProductDetail', {
+              shopId:    shopObj.id,
+              productId: item.productId,
+            })}
+          />
+        )}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: Spacing[4], gap: Spacing[3] }}
+      />
+    </View>
+  );
+}
 
 const CATEGORIES = [
   { id: 'cement',    name: 'Cement & Blocks', emoji: '🧱', color: '#F3F0EA' },
@@ -30,12 +125,19 @@ const CATEGORIES = [
 ];
 
 export default function HomeScreen({ navigation }) {
-  const itemCount = useCartStore(s => s.itemCount);
+  const itemCount    = useCartStore(s => s.itemCount);
+  const cartItems    = useCartStore(s => s.items || []); // P5-2 — for rec cache key
+  const { selectedCity } = useCityStore(); // P4-4A
+
+  // Use city store coordinates; fall back to Patna if store not hydrated yet
+  const lat = selectedCity?.center_lat ?? FALLBACK_LAT;
+  const lng = selectedCity?.center_lng ?? FALLBACK_LNG;
+  const cityName = selectedCity?.name ?? 'Patna';
 
   // Fetch nearby shops
   const { data: shopsData, isLoading: shopsLoading, refetch: refetchShops } = useQuery({
-    queryKey:  ['nearby-shops', DEFAULT_LAT, DEFAULT_LNG],
-    queryFn:   () => getNearbyShops(DEFAULT_LAT, DEFAULT_LNG),
+    queryKey:  ['nearby-shops', selectedCity?.id ?? 'patna', lat, lng],
+    queryFn:   () => getNearbyShops(lat, lng),
     staleTime: 5 * 60 * 1000,
   });
   const shop = shopsData?.shops?.[0];
@@ -81,7 +183,7 @@ export default function HomeScreen({ navigation }) {
           <View style={styles.locationRow}>
             <Ionicons name="location" size={12} color={Colors.primary} />
             <Text style={styles.location} numberOfLines={1}>
-              {shop ? `${shop.name}` : 'Patna, Bihar'}
+              {shop ? `${shop.name}` : `${cityName}, Bihar`}
             </Text>
           </View>
         </View>
@@ -124,6 +226,14 @@ export default function HomeScreen({ navigation }) {
             <Text style={styles.promiseText}>Bulk orders, next-day slot</Text>
           </View>
         </View>
+
+        {/* P5-2: AI Recommendations — sits between promise banner and categories */}
+        <RecommendationsSection
+          shopId={shop?.id}
+          cartItems={cartItems}
+          navigation={navigation}
+          shopObj={shop}
+        />
 
         {/* Categories */}
         <View style={styles.section}>
@@ -228,6 +338,7 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: Spacing[4], marginBottom: Spacing[3] },
   sectionTitle:  { fontFamily: Typography.fontFamily.bold, fontSize: Typography.size.lg, color: Colors.text },
   seeAll:        { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.sm, color: Colors.primary },
+  sectionSub:    { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: Colors.textSecondary, paddingHorizontal: Spacing[4], marginTop: -Spacing[1], marginBottom: Spacing[3] },
 
   categoryGrid: {
     flexDirection: 'row', flexWrap: 'wrap',
@@ -242,4 +353,41 @@ const styles = StyleSheet.create({
     flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between',
     paddingHorizontal: Spacing[4], gap: Spacing[3],
   },
+
+  // ── P5-2: Recommendation cards ──────────────────────────────
+  recCard: {
+    width: 180, backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.xl, overflow: 'hidden',
+    flexDirection: 'row', ...Shadow.sm,
+  },
+  recCardSkeleton: { backgroundColor: Colors.border, opacity: 0.5 },
+  recAccent: {
+    width: 4, backgroundColor: Colors.primary, // orange left border = AI curation signal
+  },
+  recImg: {
+    width: 72, height: 80,
+    backgroundColor: Colors.border,
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  recInfo: {
+    flex: 1, padding: Spacing[2], gap: 4, justifyContent: 'center',
+  },
+  recName: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.size.xs, color: Colors.text, lineHeight: 16,
+  },
+  recPrice: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize: Typography.size.sm, color: Colors.primary,
+  },
+  recTierBadge: {
+    backgroundColor: Colors.primary + '15',
+    borderRadius: BorderRadius.full,
+    paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start',
+  },
+  recTierText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: 9, color: Colors.primary,
+  },
 });
+

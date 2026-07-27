@@ -1,31 +1,55 @@
 // ────────────────────────────────────────────────────────────
-// Server Entry Point
+// Server Entry Point — P6-1: Socket.IO + Redis adapter
+//
+// We switch from app.listen() to createServer(app) so that
+// Socket.IO can share the same HTTP server and port as Express.
+// initWebSocket is now async — it awaits the Redis connection
+// before handing off to server.listen().
 // ────────────────────────────────────────────────────────────
 import 'dotenv/config';
-import { validateEnv } from './utils/validateEnv.js';
+import { validateEnv }          from './utils/validateEnv.js';
+import { initQueue, stopQueue } from './lib/jobQueue.js'; // P1-E
+import { createServer }         from 'http';
+import { initWebSocket }        from './lib/websocket.js'; // P6-1
 
 // Validate ALL required env vars before anything else loads.
-// Server exits immediately with a clear error if any are missing.
 validateEnv();
 
 import app from './app.js';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-const server = app.listen(PORT, () => {
-  console.log('\n  🏗️  TezzNirmaan API Server');
+// Wrap Express in a raw HTTP server so Socket.IO can share the port.
+const server = createServer(app);
+
+// P6-1: initWebSocket is async — it must await the Redis pub/sub
+// adapter connection before the server starts accepting traffic.
+// If REDIS_URL is not set it falls back gracefully to single-instance mode.
+await initWebSocket(server);
+
+server.listen(PORT, () => {
+  console.log('\n  🏗️  TezzNirmaan API + Socket.IO Server');
   console.log('  ─────────────────────────────────────');
   console.log(`  Environment : ${process.env.NODE_ENV || 'development'}`);
   console.log(`  Port        : ${PORT}`);
   console.log(`  API Base    : http://localhost:${PORT}/api/v1`);
+  console.log(`  Socket.IO   : ws://localhost:${PORT} (/customer /rider /shop)`);
+  console.log(`  Redis Adapter: ${process.env.REDIS_URL ? 'enabled ✓' : 'disabled (single-instance)'}`);
   console.log(`  Health      : http://localhost:${PORT}/health`);
   console.log('  ─────────────────────────────────────\n');
+
+  // P1-E: Start job queue after HTTP server is listening.
+  // Non-blocking — queue startup failure never crashes the server.
+  initQueue().then((q) => {
+    if (q) console.log('  ✓ Job queue (pg-boss) running');
+  }).catch(() => {}); // errors already logged inside initQueue
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received — shutting down gracefully...');
-  server.close(() => {
+  server.close(async () => {
+    await stopQueue(); // P1-E: drain in-flight jobs before exit
     console.log('Server closed.');
     process.exit(0);
   });
@@ -33,7 +57,10 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('\nSIGINT received — shutting down...');
-  server.close(() => process.exit(0));
+  server.close(async () => {
+    await stopQueue(); // P1-E
+    process.exit(0);
+  });
 });
 
 export default server;

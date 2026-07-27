@@ -8,16 +8,22 @@ import { getMuted, setMuted } from '../../lib/sounds';
 import NotificationBell from '../../components/NotificationBell';
 
 const NAV_ITEMS = [
-  { href: '/dashboard/orders',    icon: '🛒', label: 'Orders',        roles: ['shop_owner', 'shop_staff'] },
-  { href: '/dashboard/inventory', icon: '📦', label: 'Inventory',     roles: ['shop_owner', 'shop_staff'] },
-  { href: '/dashboard/delivery',  icon: '🛵', label: 'Delivery',      roles: ['shop_owner'] },
-  { href: '/dashboard/analytics', icon: '📈', label: 'Analytics',     roles: ['shop_owner'] },
-  { href: '/dashboard/slots',     icon: '🗓️', label: 'Slots',         roles: ['shop_owner'] },  // B6
-  { href: '/dashboard/reviews',   icon: '⭐', label: 'Reviews',       roles: ['shop_owner'] },
-  { href: '/dashboard/summary',   icon: '📊', label: "Today's Summary", roles: ['shop_owner'] },
-  { href: '/admin/shops',         icon: '🏪', label: 'Admin: Shops',  roles: ['platform_admin'] },
-  { href: '/admin/riders',        icon: '👤', label: 'Admin: Riders', roles: ['platform_admin'] },
+  { href: '/dashboard/orders',      icon: '🛒', label: 'Orders',          roles: ['shop_owner', 'shop_staff'] },
+  { href: '/dashboard/inventory',   icon: '📦', label: 'Inventory',       roles: ['shop_owner', 'shop_staff'] },
+  { href: '/dashboard/delivery',    icon: '🛵', label: 'Delivery',        roles: ['shop_owner'] },
+  { href: '/dashboard/analytics',   icon: '📈', label: 'Analytics',       roles: ['shop_owner'] },
+  { href: '/dashboard/forecast',    icon: '🧠', label: 'AI Forecast',     roles: ['shop_owner'] },  // P5-2
+  { href: '/dashboard/slots',       icon: '🗓️', label: 'Slots',           roles: ['shop_owner'] },  // B6
+  { href: '/dashboard/reviews',     icon: '⭐', label: 'Reviews',         roles: ['shop_owner'] },
+  { href: '/dashboard/summary',     icon: '📊', label: "Today's Summary", roles: ['shop_owner'] },
+  { href: '/dashboard/settlements', icon: '💰', label: 'Settlements',     roles: ['shop_owner'] },  // P4-4B
+  { href: '/dashboard/returns',     icon: '🔄', label: 'Returns',         roles: ['shop_owner'] },  // P6-3
+  { href: '/dashboard/b2b',         icon: '🏢', label: 'B2B Contractors',  roles: ['platform_admin'] }, // P6-6
+  { href: '/admin/shops',           icon: '🏪', label: 'Admin: Shops',    roles: ['platform_admin'] },
+  { href: '/admin/riders',          icon: '👤', label: 'Admin: Riders',   roles: ['platform_admin'] },
 ];
+
+
 
 
 

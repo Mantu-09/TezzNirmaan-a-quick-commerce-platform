@@ -1,0 +1,123 @@
+name: Backend — Test & Deploy
+
+# ────────────────────────────────────────────────────────────
+# Triggers:
+#   • Automatic: push to main touching anything in backend/
+#   • Manual:    workflow_dispatch (for emergency re-deploys)
+#
+# Required secrets:
+#   TEST_SUPABASE_URL          — test project URL
+#   TEST_SUPABASE_ANON_KEY     — test project anon key
+#   TEST_SUPABASE_SERVICE_KEY  — test project service role key
+#   RENDER_DEPLOY_HOOK_URL     — from Render dashboard → Settings → Deploy Hook
+#   CODECOV_TOKEN              — from codecov.io (optional for public repos)
+# ────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: false   # never cancel in-progress deploy — let it finish
+
+jobs:
+  test-and-deploy:
+    name: Test → Deploy to Render
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Node.js ───────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      # ── Install ───────────────────────────────────────────
+      - name: Install dependencies
+        run: cd backend && npm ci
+
+      # ── Lint ──────────────────────────────────────────────
+      - name: Lint
+        run: cd backend && npm run lint --if-present
+        continue-on-error: true   # lint warnings don't block deploy
+
+      # ── Tests ─────────────────────────────────────────────
+      - name: Run Jest tests
+        # --coverage : emit LCOV report to backend/coverage/
+        # --forceExit: jest may hang on open handles (socket.io, pg-boss)
+        # --runInBand : tests share DB — run serially to avoid seed conflicts
+        run: cd backend && npm test -- --coverage --forceExit --runInBand
+        env:
+          NODE_ENV:                   test
+          # Test Supabase project (separate from production)
+          SUPABASE_URL:               ${{ secrets.TEST_SUPABASE_URL }}
+          SUPABASE_ANON_KEY:          ${{ secrets.TEST_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.TEST_SUPABASE_SERVICE_KEY }}
+          TEST_SUPABASE_URL:          ${{ secrets.TEST_SUPABASE_URL }}
+          TEST_SUPABASE_ANON_KEY:     ${{ secrets.TEST_SUPABASE_ANON_KEY }}
+          TEST_SUPABASE_SERVICE_KEY:  ${{ secrets.TEST_SUPABASE_SERVICE_KEY }}
+          # Stub secrets so module imports don't crash at test startup
+          RAZORPAY_KEY_ID:            test_key
+          RAZORPAY_KEY_SECRET:        test_secret
+          FAST2SMS_API_KEY:           test_key
+          JWT_SECRET:                 test_jwt_secret_minimum_32_chars_long
+          # Socket.IO Redis adapter — leave blank → runs in single-instance mode
+          REDIS_URL:                  ''
+
+      # ── Coverage upload ───────────────────────────────────
+      - name: Upload coverage to Codecov
+        if: success()  # only upload if all tests passed
+        uses: codecov/codecov-action@v4
+        with:
+          directory: backend/coverage
+          flags:     backend
+          fail_ci_if_error: false  # don't block deploy if Codecov is down
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      # ── Deploy ────────────────────────────────────────────
+      # Only deploy if tests passed. Render re-deploys by hitting
+      # the webhook URL — no SSH or Docker involved.
+      - name: Deploy to Render
+        if: success()
+        run: |
+          echo "Triggering Render deploy..."
+          RESPONSE=$(curl --silent --write-out "\n%{http_code}" \
+            --max-time 30 \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n1)
+
+          echo "Response: $BODY"
+          echo "HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "❌ Deploy hook failed with status $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "✅ Deploy triggered. View status: https://dashboard.render.com"
+
+      # ── Summary ───────────────────────────────────────────
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "## ✅ Backend deployed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Render dashboard:** https://dashboard.render.com" >> $GITHUB_STEP_SUMMARY

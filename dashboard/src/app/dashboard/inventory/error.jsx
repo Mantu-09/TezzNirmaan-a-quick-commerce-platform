@@ -4,7 +4,7 @@
 // parent dashboard/error.jsx — that's fine. Individual segments
 // can have this file if they need custom recovery UX.
 import { useEffect } from 'react';
-import { captureError } from '../../../../lib/sentry-client';
+import { captureError } from '../../../lib/sentry-client';
 
 export default function InventoryError({ error, reset }) {
   useEffect(() => { captureError(error, { segment: 'inventory' }); }, [error]);

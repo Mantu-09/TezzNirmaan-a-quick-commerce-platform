@@ -5,9 +5,11 @@ import * as ordersApi from '../api/orders';
 
 // ── Cart Item shape ──────────────────────────────────────────
 // {
+//   cartItemId:     string | undefined,
 //   productId:      string,
 //   inventoryId:    string,   // shop_inventory row id
 //   shopId:         string,
+//   shopName:       string,   // for display in grouped cart
 //   name:           string,
 //   imageUrl:       string | null,
 //   unit:           string,   // 'bag', 'piece', 'kg', 'sq.ft', etc.
@@ -19,17 +21,44 @@ import * as ordersApi from '../api/orders';
 const useCartStore = create(
   persist(
     (set, get) => ({
-      items:  [],
-      shopId: null,  // V1: single shop constraint
+      items: [],
 
-      // Derived getters
+      // ── Derived getters ─────────────────────────────────────
       get quickItems()     { return get().items.filter(i => i.deliveryTier === 'quick'); },
       get scheduledItems() { return get().items.filter(i => i.deliveryTier === 'scheduled'); },
       get itemCount()      { return get().items.reduce((s, i) => s + i.quantity, 0); },
       get isEmpty()        { return get().items.length === 0; },
-      get hasBothTiers()   {
+
+      get hasBothTiers() {
         const tiers = new Set(get().items.map(i => i.deliveryTier));
         return tiers.has('quick') && tiers.has('scheduled');
+      },
+
+      // P4-3B: Multi-shop derived state
+      get shopIds() {
+        return [...new Set(get().items.map(i => i.shopId))];
+      },
+      get isMultiShop() {
+        return get().shopIds.length > 1;
+      },
+      get itemsByShop() {
+        // Returns { [shopId]: { shopName, items, quickItems, scheduledItems } }
+        const groups = {};
+        for (const item of get().items) {
+          if (!groups[item.shopId]) {
+            groups[item.shopId] = {
+              shopId:         item.shopId,
+              shopName:       item.shopName || 'Shop',
+              items:          [],
+              quickItems:     [],
+              scheduledItems: [],
+            };
+          }
+          groups[item.shopId].items.push(item);
+          if (item.deliveryTier === 'quick')     groups[item.shopId].quickItems.push(item);
+          if (item.deliveryTier === 'scheduled') groups[item.shopId].scheduledItems.push(item);
+        }
+        return groups;
       },
 
       totalPaise() {
@@ -45,18 +74,20 @@ const useCartStore = create(
       },
 
       // ── OPTIMISTIC ADD ──────────────────────────────────────
-      // Updates local state immediately, then syncs to backend in background.
+      // P4-3B: Multi-shop carts are now allowed — no single-shop restriction.
+      // Items from different shops co-exist in the same cart.
       addItem: (item) => {
         set((state) => {
-          const idx = state.items.findIndex(i => i.productId === item.productId);
+          const idx = state.items.findIndex(
+            i => i.productId === item.productId && i.shopId === item.shopId
+          );
           if (idx >= 0) {
             const updated = [...state.items];
             updated[idx] = { ...updated[idx], quantity: updated[idx].quantity + (item.quantity || 1) };
             return { items: updated };
           }
           return {
-            items:  [...state.items, { ...item, quantity: item.quantity || 1 }],
-            shopId: item.shopId,
+            items: [...state.items, { ...item, quantity: item.quantity || 1 }],
           };
         });
 
@@ -66,52 +97,61 @@ const useCartStore = create(
             console.warn('[Cart] addToCart sync failed:', err.message);
             // Revert optimistic add on error
             set((state) => ({
-              items: state.items.filter(i => i.productId !== item.productId),
+              items: state.items.filter(
+                i => !(i.productId === item.productId && i.shopId === item.shopId)
+              ),
             }));
           });
       },
 
       // ── OPTIMISTIC UPDATE ───────────────────────────────────
-      updateQuantity: (productId, quantity) => {
+      updateQuantity: (productId, quantity, shopId) => {
         if (quantity <= 0) {
-          get().removeItem(productId);
+          get().removeItem(productId, shopId);
           return;
         }
 
-        const prev = get().items.find(i => i.productId === productId);
+        const prev = get().items.find(
+          i => i.productId === productId && (!shopId || i.shopId === shopId)
+        );
         if (!prev) return;
 
         set((state) => ({
           items: state.items.map(i =>
-            i.productId === productId ? { ...i, quantity } : i
+            i.productId === productId && (!shopId || i.shopId === shopId)
+              ? { ...i, quantity }
+              : i
           ),
         }));
 
-        // Find inventory item id for API call
         ordersApi.updateCartItem(prev.cartItemId, quantity).catch((err) => {
           console.warn('[Cart] updateQuantity sync failed:', err.message);
-          // Revert
           set((state) => ({
             items: state.items.map(i =>
-              i.productId === productId ? { ...i, quantity: prev.quantity } : i
+              i.productId === productId && (!shopId || i.shopId === shopId)
+                ? { ...i, quantity: prev.quantity }
+                : i
             ),
           }));
         });
       },
 
       // ── OPTIMISTIC REMOVE ───────────────────────────────────
-      removeItem: (productId) => {
-        const prev = get().items.find(i => i.productId === productId);
+      removeItem: (productId, shopId) => {
+        const prev = get().items.find(
+          i => i.productId === productId && (!shopId || i.shopId === shopId)
+        );
         if (!prev) return;
 
         set((state) => ({
-          items: state.items.filter(i => i.productId !== productId),
+          items: state.items.filter(
+            i => !(i.productId === productId && (!shopId || i.shopId === shopId))
+          ),
         }));
 
         if (prev.cartItemId) {
           ordersApi.removeCartItem(prev.cartItemId).catch((err) => {
             console.warn('[Cart] removeItem sync failed:', err.message);
-            // Revert
             set((state) => ({ items: [...state.items, prev] }));
           });
         }
@@ -119,7 +159,7 @@ const useCartStore = create(
 
       // ── CLEAR ────────────────────────────────────────────────
       clearCart: () => {
-        set({ items: [], shopId: null });
+        set({ items: [] });
         ordersApi.clearCart().catch(() => {});
       },
 
@@ -133,6 +173,7 @@ const useCartStore = create(
             productId:      item.products.id,
             inventoryId:    item.shop_inventory.id,
             shopId:         item.shop_id,
+            shopName:       item.shop_inventory?.shop?.name || item.shop_name || 'Shop',
             name:           item.products.name,
             imageUrl:       item.products.images?.[0] || null,
             unit:           item.products.unit,
@@ -140,17 +181,17 @@ const useCartStore = create(
             unitPricePaise: item.shop_inventory.price,
             quantity:       item.quantity,
           }));
-          set({ items: serverItems, shopId: serverItems[0]?.shopId || null });
+          set({ items: serverItems });
         } catch (e) {
           console.warn('[Cart] Server sync failed (using local cache):', e.message);
         }
       },
     }),
     {
-      name:    'tezznirmaan-cart-v1',
+      name:    'tezznirmaan-cart-v2', // bumped from v1 — old cart data is discarded on upgrade
       storage: createJSONStorage(() => AsyncStorage),
-      // Only persist items and shopId — derived state is recomputed
-      partialize: (state) => ({ items: state.items, shopId: state.shopId }),
+      // Only persist items — all derived state is recomputed
+      partialize: (state) => ({ items: state.items }),
     }
   )
 );

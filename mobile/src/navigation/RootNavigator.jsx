@@ -1,7 +1,15 @@
 /**
- * RootNavigator — B2 update
+ * RootNavigator — P1-A update
  *
- * Routing logic:
+ * P1-A additions:
+ *   • Accepts navigationRef prop from App.jsx and forwards it to
+ *     NavigationContainer so imperative navigation from notification
+ *     tap handlers works correctly.
+ *   • Adds `linking` config for deep links (tezznirmaan://order/:id)
+ *     so notification taps open the correct screen even when the app
+ *     was killed.
+ *
+ * Routing logic (unchanged from B2):
  *   Not authenticated        → AuthNavigator (phone + OTP login)
  *   shop_owner + !setup_complete → OnboardingNavigator (first-login wizard)
  *   Everything else          → TabNavigator (main app)
@@ -12,18 +20,69 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { ActivityIndicator, View } from 'react-native';
 import useAuthStore from '../store/authStore';
+import useCityStore from '../store/cityStore'; // P4-4A
 import { Colors } from '../theme';
 import AuthNavigator from './AuthNavigator';
 import TabNavigator from './TabNavigator';
 import ShopOnboardingScreen from '../screens/onboarding/ShopOnboardingScreen';
+import CitySelectScreen from '../screens/city/CitySelectScreen'; // P4-4A
 
 const Stack = createNativeStackNavigator();
+
+// ── Deep-link config (P1-A) ──────────────────────────────────
+// Matches both the custom scheme (tezznirmaan://) and the web URL
+// (https://tezznirmaan.in) so universal links work on iOS.
+//
+// The screen names used here MUST match those registered in TabNavigator/
+// the stack navigators. OrderTracking lives inside the Orders stack.
+const linking = {
+  prefixes: ['tezznirmaan://', 'https://tezznirmaan.in'],
+  config: {
+    screens: {
+      // Top-level screen groups (must match what RootNavigator renders)
+      Main: {
+        screens: {
+          // Map deep-link paths to screens inside the tab stacks.
+          // TabNavigator renders nested stacks, so we nest here too.
+          Orders: {
+            screens: {
+              OrderTracking:    'order/:orderId',
+              OrderHistory:     'orders',
+              OrderConfirmation:'order-confirmation/:orderId',
+            },
+          },
+          Home: {
+            screens: {
+              ProductDetail: 'product/:productId',
+            },
+          },
+          Notifications: 'notifications',
+        },
+      },
+    },
+  },
+};
 
 // ── Onboarding navigator (modal-style, no back to auth)
 function OnboardingNavigator() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
       <Stack.Screen name="ShopOnboarding" component={ShopOnboardingScreen} />
+    </Stack.Navigator>
+  );
+}
+
+// ── Post-auth city gate: authenticated users who haven't selected
+//    a city yet (e.g. existing users after the P4-4A update) see
+//    CitySelectScreen with postAuth=true so they can go back.
+function PostAuthCityGate() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen
+        name="CitySelectGate"
+        component={CitySelectScreen}
+        initialParams={{ postAuth: true }}
+      />
     </Stack.Navigator>
   );
 }
@@ -38,8 +97,13 @@ function MainNavigator() {
   );
 }
 
-export default function RootNavigator() {
+/**
+ * @param {React.RefObject} navigationRef  - forwarded from App.jsx for
+ *   imperative navigation from push notification tap handlers.
+ */
+export default function RootNavigator({ navigationRef }) {
   const { isAuthenticated, isLoading, user, restoreSession } = useAuthStore();
+  const { selectedCity } = useCityStore(); // P4-4A
 
   useEffect(() => {
     restoreSession();
@@ -53,18 +117,26 @@ export default function RootNavigator() {
     );
   }
 
-  // Determine which navigator to show
   const needsOnboarding =
     isAuthenticated &&
     user?.role === 'shop_owner' &&
     user?.setup_complete === false;
 
+  // P4-4A: authenticated users who haven't selected a city yet
+  // (e.g. users who upgraded from a version before P4-4A)
+  const needsCitySelection = isAuthenticated && !selectedCity;
+
   return (
-    <NavigationContainer>
+    <NavigationContainer
+      ref={navigationRef}   // P1-A: enables navigationRef.current.navigate(...)
+      linking={linking}     // P1-A: deep-link config for notification taps
+    >
       {!isAuthenticated ? (
         <AuthNavigator />
       ) : needsOnboarding ? (
         <OnboardingNavigator />
+      ) : needsCitySelection ? (
+        <PostAuthCityGate />  // P4-4A: prompt city selection for existing users
       ) : (
         <MainNavigator />
       )}

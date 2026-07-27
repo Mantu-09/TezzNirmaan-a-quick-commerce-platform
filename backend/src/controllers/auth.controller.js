@@ -15,6 +15,8 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { AppError, AuthenticationError, ValidationError } from '../utils/errors.js';
 import logger from '../utils/logger.js';
 import { incrWithTtl } from '../config/redis.js'; // B7: Redis-backed rate limiting
+import { saveExpoPushToken } from '../services/push.service.js'; // P1-A
+import * as referralService from '../services/referral.service.js'; // P4-2A
 
 // ── Redis-backed OTP rate limiter ────────────────────────
 // Key: otp_rate:<phone>. Max: 3 per phone per 10 minutes.
@@ -85,7 +87,8 @@ export async function requestOtp(req, res, next) {
  */
 export async function verifyOtp(req, res, next) {
   try {
-    const { phone, token } = req.body;
+    // P4-2A: accept optional referral_code alongside phone + token
+    const { phone, token, referral_code } = req.body;
     if (!phone || !token) throw new ValidationError('phone and token are required');
 
     const normalisedPhone = phone.startsWith('+') ? phone : `+${phone}`;
@@ -102,6 +105,17 @@ export async function verifyOtp(req, res, next) {
     }
 
     const { session, user } = data;
+
+    // P5-0A FIX: Reliable new-user detection via DB lookup BEFORE upsert.
+    // The previous 30-second timestamp window was fragile — a slow SMS delivery
+    // or user pause could misclassify a genuine new user as returning, silently
+    // dropping referral rewards. Checking for the profiles row is 100% reliable.
+    const { data: existingProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('id', user.id)
+      .maybeSingle();
+    const isNewUser = !existingProfile;
 
     // Upsert profile row — creates the record on first login, no-op on repeat
     // Role defaults to 'customer' for self-signed-up phone users
@@ -124,7 +138,14 @@ export async function verifyOtp(req, res, next) {
       });
     }
 
-    logger.info('OTP verified — user authenticated', { userId: user.id, phone: normalisedPhone });
+    // P4-2A: Apply referral code for new users — NEVER blocks signup on failure
+    if (isNewUser && referral_code) {
+      referralService.applyReferralCode(user.id, referral_code)
+        .then(() => logger.info('referral: code applied on signup', { userId: user.id, referral_code }))
+        .catch(err => logger.warn('referral: code application failed (non-fatal)', { userId: user.id, referral_code, error: err.message }));
+    }
+
+    logger.info('OTP verified — user authenticated', { userId: user.id, phone: normalisedPhone, isNewUser });
 
     res.json({
       success: true,
@@ -139,6 +160,7 @@ export async function verifyOtp(req, res, next) {
           id:    user.id,
           phone: normalisedPhone,
           role:  user.app_metadata?.role || 'customer',
+          is_new_user: isNewUser,
         },
       },
     });
@@ -307,7 +329,25 @@ export async function staffLogin(req, res, next) {
       throw new AuthenticationError('Access denied: this endpoint is for staff accounts only');
     }
 
-    logger.info('Staff login successful', { userId: user.id, role, phone });
+    // Fetch shop_id for shop owners/staff so the dashboard can set X-Shop-Id header
+    let shopId = null;
+    if (role === 'shop_owner') {
+      const { data: shop } = await supabaseAdmin
+        .from('shops')
+        .select('id')
+        .eq('owner_id', user.id)
+        .maybeSingle();
+      shopId = shop?.id || null;
+    } else if (role === 'shop_staff') {
+      const { data: staffRow } = await supabaseAdmin
+        .from('shop_staff')
+        .select('shop_id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      shopId = staffRow?.shop_id || null;
+    }
+
+    logger.info('Staff login successful', { userId: user.id, role, phone, shopId });
 
     res.json({
       success: true,
@@ -319,13 +359,40 @@ export async function staffLogin(req, res, next) {
           tokenType:    session.token_type,
         },
         user: {
-          id:    user.id,
+          id:     user.id,
           phone,
           role,
-          email: user.email,
+          email:  user.email,
+          shop_id: shopId,
         },
       },
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /auth/push-token
+ * Requires: authenticate middleware
+ * Body: { token: "ExponentPushToken[xxxxxx]" }
+ *
+ * Stores the user's Expo push token on their profile row.
+ * Called by the mobile app whenever push permissions are granted
+ * (on first launch, after permission prompt, or after reinstall).
+ *
+ * The token is validated via expo-server-sdk before saving.
+ * Invalid tokens are rejected with 400 rather than stored as garbage.
+ */
+export async function savePushToken(req, res, next) {
+  try {
+    const { token } = req.body;
+    if (!token) throw new ValidationError('token is required');
+
+    await saveExpoPushToken(req.user.id, token);
+
+    logger.info('Push token saved', { userId: req.user.id });
+    res.json({ success: true, data: { message: 'Push token registered' } });
   } catch (err) {
     next(err);
   }

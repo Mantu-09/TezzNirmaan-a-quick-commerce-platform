@@ -10,6 +10,7 @@ import SubOrderCard from '../../components/order/SubOrderCard';
 import Button from '../../components/common/Button';
 import { formatOrderTime } from '../../utils/date';
 import { formatPaise } from '../../utils/money';
+import { estimateCashback } from '../../api/cashback'; // P4-2B
 import { Colors, Typography, Spacing, BorderRadius } from '../../theme';
 
 function SuccessCheckmark() {
@@ -93,6 +94,27 @@ export default function OrderConfirmationScreen({ route, navigation }) {
           </View>
         )}
 
+        {/* P4-2B: Cashback preview card */}
+        {order?.total_amount > 0 && (() => {
+          const cb = estimateCashback(order.total_amount);
+          if (cb.paise === 0) return null;
+          return (
+            <View style={styles.cashbackCard}>
+              <View style={styles.cashbackLeft}>
+                <Text style={styles.cashbackEmoji}>💰</Text>
+                <View>
+                  <Text style={styles.cashbackTitle}>
+                    You'll earn <Text style={styles.cashbackAmt}>{formatPaise(cb.paise)}</Text> cashback
+                  </Text>
+                  <Text style={styles.cashbackSub}>
+                    {cb.percent}% on this order · credited when delivered · expires in 90 days
+                  </Text>
+                </View>
+              </View>
+            </View>
+          );
+        })()}
+
         {/* Action buttons */}
         <View style={styles.actions}>
           <Button
@@ -155,4 +177,16 @@ const styles = StyleSheet.create({
   actions:        { gap: Spacing[3] },
   continueBtn:    { alignItems: 'center', padding: Spacing[4] },
   continueBtnText: { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.base, color: Colors.primary },
+
+  // P4-2B: Cashback preview
+  cashbackCard: {
+    backgroundColor: '#F0FDF4', borderRadius: BorderRadius.xl,
+    borderWidth: 1, borderColor: '#BBF7D0',
+    padding: Spacing[4], marginBottom: Spacing[4],
+  },
+  cashbackLeft:  { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing[3] },
+  cashbackEmoji: { fontSize: 22, marginTop: 1 },
+  cashbackTitle: { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.base, color: '#166534' },
+  cashbackAmt:   { fontFamily: Typography.fontFamily.bold, color: '#15803D' },
+  cashbackSub:   { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: '#4B7A5A', marginTop: 2 },
 });

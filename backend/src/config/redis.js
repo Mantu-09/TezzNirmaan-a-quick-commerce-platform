@@ -11,6 +11,8 @@
 // Falls back to a no-op mock when env vars are missing
 // (development, CI) so the app still boots without Redis.
 // ────────────────────────────────────────────────────────────
+// ── Imports ────────────────────────────────────────────────
+import { Redis as UpstashRedis } from '@upstash/redis';
 import logger from '../utils/logger.js';
 
 let redis = null;
@@ -83,9 +85,8 @@ async function initRedis() {
   }
 
   try {
-    // Dynamic import so the package is optional in dev
-    const { Redis } = await import('@upstash/redis');
-    redis = new Redis({ url, token });
+    // Static import at top of file; moduleNameMapper mocks this in Jest
+    redis = new UpstashRedis({ url, token });
 
     // Verify connection
     await redis.ping();

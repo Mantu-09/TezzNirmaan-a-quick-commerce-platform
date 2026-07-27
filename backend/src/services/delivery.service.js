@@ -2,11 +2,16 @@
 // Delivery Service
 // Handles rider assignment and delivery lifecycle
 // ────────────────────────────────────────────────────────────
-import { supabaseAdmin } from '../config/supabase.js';
+import { Client }          from '@googlemaps/google-maps-services-js'; // P4-1C B-08
+import { supabaseAdmin }   from '../config/supabase.js';
 import { assertTransition } from '../utils/stateMachine.js';
 import { NotFoundError, AppError } from '../utils/errors.js';
 import * as notificationService from './notification.service.js';
+import { recordDeliveryEarning } from './rider-earnings.service.js'; // P2-B
 import logger from '../utils/logger.js';
+
+// P4-1C B-08: Maps client for one-shot geocoding on assignment creation
+const _mapsClient = new Client();
 
 /** Get all deliveries for a rider (by their profile_id). */
 export async function getDeliveries(profileId, { status, page = 1, limit = 20 } = {}) {
@@ -147,7 +152,7 @@ export async function assignRider(subOrderId, riderId, assignedBy, shopId) {
     // Get order number via sub_order
     const { data: subOrderInfo } = await supabaseAdmin
       .from('sub_orders')
-      .select('sub_order_number, orders!inner(order_number)')
+      .select('sub_order_number, orders!inner(order_number, delivery_address_snapshot)')
       .eq('id', subOrderId)
       .single();
 
@@ -157,6 +162,50 @@ export async function assignRider(subOrderId, riderId, assignedBy, shopId) {
       subOrderId,
       deliveryOtp
     );
+
+    // P4-1C B-08: Geocode the delivery address once and cache on the assignment row.
+    // Done after notifying the rider so the critical path isn't delayed.
+    // Non-fatal: if geocoding fails, route.service.js will fall back to live geocoding.
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (apiKey && assignment?.id && subOrderInfo?.orders?.delivery_address_snapshot) {
+      const snap = subOrderInfo.orders.delivery_address_snapshot;
+
+      // Use pre-stored coordinates if available (set at order placement time)
+      const cachedLat = snap.lat  ? parseFloat(snap.lat)  : null;
+      const cachedLng = snap.lng  ? parseFloat(snap.lng)  : null;
+
+      if (cachedLat && cachedLng) {
+        // Already have coords from address snapshot — persist directly
+        supabaseAdmin
+          .from('delivery_assignments')
+          .update({ dropoff_lat: cachedLat, dropoff_lng: cachedLng })
+          .eq('id', assignment.id)
+          .then(() => logger.debug('delivery-svc: dropoff coords cached from snapshot', { assignmentId: assignment.id }))
+          .catch(e => logger.warn('delivery-svc: failed to cache coords from snapshot', { error: e.message }));
+      } else {
+        // No snapshot coords — geocode the text address
+        const addrText = [
+          snap.address_line1,
+          snap.address_line2,
+          snap.city || 'Patna',
+          snap.pincode,
+          'Bihar, India',
+        ].filter(Boolean).join(', ');
+
+        _mapsClient
+          .geocode({ params: { address: addrText, key: apiKey } })
+          .then(r => {
+            const loc = r.data?.results?.[0]?.geometry?.location;
+            if (!loc) return;
+            return supabaseAdmin
+              .from('delivery_assignments')
+              .update({ dropoff_lat: loc.lat, dropoff_lng: loc.lng })
+              .eq('id', assignment.id);
+          })
+          .then(() => logger.debug('delivery-svc: dropoff coords geocoded and cached', { assignmentId: assignment.id }))
+          .catch(e => logger.warn('delivery-svc: background geocoding failed (non-fatal)', { error: e.message }));
+      }
+    }
   }
 
   return assignment;
@@ -245,6 +294,13 @@ export async function confirmDelivery(assignmentId, profileId, { otp, proofUrl }
     throw new AppError('Invalid delivery OTP', 400);
   }
 
+  // Also fetch delivery_tier for earnings calculation (P2-B)
+  const { data: subOrderTier } = await supabaseAdmin
+    .from('sub_orders')
+    .select('delivery_tier')
+    .eq('id', assignment.sub_order_id)
+    .single();
+
   const now = new Date().toISOString();
   await supabaseAdmin
     .from('delivery_assignments')
@@ -274,7 +330,7 @@ export async function confirmDelivery(assignmentId, profileId, { otp, proofUrl }
   // B1: Notify customer that order is delivered
   const { data: subOrderInfo } = await supabaseAdmin
     .from('sub_orders')
-    .select('orders!inner(customer_id, order_number, id)')
+    .select('orders!inner(customer_id, order_number, id, total_amount, shop_id)')
     .eq('id', assignment.sub_order_id)
     .single();
 
@@ -284,6 +340,30 @@ export async function confirmDelivery(assignmentId, profileId, { otp, proofUrl }
       subOrderInfo.orders.order_number,
       subOrderInfo.orders.id
     );
+  }
+
+  // P2-B: Record earning for this delivery (non-blocking — never throws)
+  recordDeliveryEarning(
+    rider.id,
+    assignmentId,
+    subOrderTier?.delivery_tier || 'quick',
+    new Date(now)
+  );
+
+  // P4-2B: Award cashback on delivery — non-blocking, idempotent via job queue
+  if (subOrderInfo?.orders) {
+    const ord = subOrderInfo.orders;
+    import('../lib/jobQueue.js')
+      .then(({ enqueueCashbackReward }) =>
+        enqueueCashbackReward(
+          ord.customer_id,
+          ord.id,
+          ord.order_number,
+          ord.total_amount,   // already in paise (bigint stored as number in JS)
+          ord.shop_id ?? null
+        )
+      )
+      .catch(err => logger.warn('confirmDelivery: failed to enqueue cashback (non-fatal)', { error: err.message }));
   }
 
   return { message: 'Delivery confirmed' };

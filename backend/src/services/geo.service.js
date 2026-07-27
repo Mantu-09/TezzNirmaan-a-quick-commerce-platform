@@ -4,6 +4,7 @@
 // ────────────────────────────────────────────────────────────
 import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
+import { getCachedNearbyShops } from './cache.service.js'; // P2-C
 
 /**
  * Find all active shops within delivery range of a customer's location.
@@ -21,37 +22,16 @@ import { AppError } from '../utils/errors.js';
 export async function findNearbyShops(lat, lng) {
   if (!lat || !lng) throw new AppError('lat and lng are required', 400);
 
-  // PostGIS query via supabase rpc — requires a DB function to be created.
-  // The function below should be created in Supabase SQL editor:
-  //
-  // CREATE OR REPLACE FUNCTION find_nearby_shops(customer_lat float8, customer_lng float8)
-  // RETURNS TABLE(
-  //   id uuid, name text, slug text, phone text, address_line1 text,
-  //   city text, pincode text, is_accepting_orders boolean,
-  //   quick_delivery_radius_km numeric, scheduled_delivery_radius_km numeric,
-  //   distance_km float8, can_quick_deliver boolean, can_scheduled_deliver boolean
-  // )
-  // LANGUAGE sql STABLE AS $$
-  //   SELECT
-  //     s.id, s.name, s.slug, s.phone, s.address_line1, s.city, s.pincode,
-  //     s.is_accepting_orders, s.quick_delivery_radius_km, s.scheduled_delivery_radius_km,
-  //     ST_Distance(s.location, ST_MakePoint(customer_lng, customer_lat)::geography) / 1000 AS distance_km,
-  //     ST_DWithin(s.location, ST_MakePoint(customer_lng, customer_lat)::geography, s.quick_delivery_radius_km * 1000) AS can_quick_deliver,
-  //     ST_DWithin(s.location, ST_MakePoint(customer_lng, customer_lat)::geography, s.scheduled_delivery_radius_km * 1000) AS can_scheduled_deliver
-  //   FROM shops s
-  //   WHERE s.is_active = true
-  //     AND s.is_accepting_orders = true
-  //     AND ST_DWithin(s.location, ST_MakePoint(customer_lng, customer_lat)::geography, s.scheduled_delivery_radius_km * 1000)
-  //   ORDER BY distance_km;
-  // $$;
-
-  const { data, error } = await supabaseAdmin.rpc('find_nearby_shops', {
-    customer_lat: lat,
-    customer_lng: lng,
+  // P2-C: wrap the expensive PostGIS RPC in a 2-min grid-cell cache.
+  // Cache miss runs the actual supabase.rpc(); hit returns JSON instantly.
+  return getCachedNearbyShops(lat, lng, async (fetchLat, fetchLng) => {
+    const { data, error } = await supabaseAdmin.rpc('find_nearby_shops', {
+      customer_lat: fetchLat,
+      customer_lng: fetchLng,
+    });
+    if (error) throw error;
+    return data || [];
   });
-
-  if (error) throw error;
-  return data || [];
 }
 
 /**

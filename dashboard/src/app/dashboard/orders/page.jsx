@@ -2,7 +2,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
-import { formatDistanceToNow, format } from 'date-fns';
+import { formatDistanceToNow, format, subDays } from 'date-fns'; // P5-5C: subDays added
 import { ordersApi } from '../../../lib/api';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -237,13 +237,54 @@ function OrderCard({ order, isNew, onAction }) {
   );
 }
 
-// ── Main Orders Page ──────────────────────────────────────────
+// ── Main Orders Page ────────────────────────────────────────────
 const TABS = ['All Active', '⚡ Quick', '📅 Scheduled', '✓ Done'];
 
 export default function OrdersPage() {
   const [activeTab,   setActiveTab]   = useState(0);
   const [newOrderIds, setNewOrderIds] = useState(new Set());
   const queryClient = useQueryClient();
+
+  // P5-5C: CSV Export state
+  const today   = format(new Date(), 'yyyy-MM-dd');
+  const weekAgo = format(subDays(new Date(), 7), 'yyyy-MM-dd');
+  const [exportFrom,    setExportFrom]    = useState(weekAgo);
+  const [exportTo,      setExportTo]      = useState(today);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [showExport,    setShowExport]    = useState(false);
+
+  const handleExport = async () => {
+    setExportLoading(true);
+    try {
+      // Use fetch so we can pass the Bearer token (window.open can't set headers)
+      const Cookies = (await import('js-cookie')).default;
+      const token  = Cookies.get('tn_token');
+      const shopId = Cookies.get('tn_shop_id');
+      const qs = new URLSearchParams({ from: exportFrom, to: exportTo, format: 'csv' }).toString();
+      const res = await fetch(`/api/backend/shop/orders/export?${qs}`, {
+        headers: {
+          ...(token  && { Authorization: `Bearer ${token}` }),
+          ...(shopId && { 'X-Shop-Id': shopId }),
+        },
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `orders_${exportFrom}_to_${exportTo}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setShowExport(false);
+    } catch (e) {
+      alert(`Export failed: ${e.message}`);
+    } finally {
+      setExportLoading(false);
+    }
+  };
 
   const statusFilter = {
     0: ACTIVE_STATUSES,
@@ -269,23 +310,78 @@ export default function OrdersPage() {
     staleTime:       15000,
   });
 
-  const orders    = data?.orders || [];
+  const orders    = data?.data?.subOrders || [];
   const quickCount = orders.filter(o => o.delivery_tier === 'quick' && o.status === 'pending').length;
   const schedCount = orders.filter(o => o.delivery_tier === 'scheduled' && o.status === 'pending').length;
 
   return (
-    <div className="page-body">
+    <div className="page-body" data-testid="order-queue">
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s5)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--s5)', gap: 'var(--s3)', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>Order Queue</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginTop: 2 }}>
             {format(new Date(), "EEEE, d MMMM")} · {orders.length} active order{orders.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <button className="btn btn-outline btn-sm" onClick={() => refetch()}>
-          ↻ Refresh
-        </button>
+        <div style={{ display: 'flex', gap: 'var(--s3)', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* P5-5C: Export CSV */}
+          <div style={{ position: 'relative' }}>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => setShowExport(v => !v)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              📅 Export CSV
+            </button>
+            {showExport && (
+              <div style={{
+                position: 'absolute', right: 0, top: '110%', zIndex: 50,
+                background: 'var(--surface)', border: '1px solid var(--border)',
+                borderRadius: 10, padding: 'var(--s4)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                minWidth: 260,
+              }}>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 'var(--s3)' }}>Export Orders</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>From</label>
+                    <input
+                      type="date"
+                      className="input"
+                      value={exportFrom}
+                      onChange={e => setExportFrom(e.target.value)}
+                      max={exportTo}
+                      style={{ fontSize: 13, padding: '6px 10px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'block', marginBottom: 4 }}>To</label>
+                    <input
+                      type="date"
+                      className="input"
+                      value={exportTo}
+                      onChange={e => setExportTo(e.target.value)}
+                      min={exportFrom}
+                      max={today}
+                      style={{ fontSize: 13, padding: '6px 10px' }}
+                    />
+                  </div>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  style={{ width: '100%' }}
+                  onClick={handleExport}
+                  disabled={exportLoading || !exportFrom || !exportTo}
+                >
+                  {exportLoading ? '⏳ Generating…' : '⬇️ Download CSV'}
+                </button>
+              </div>
+            )}
+          </div>
+          <button className="btn btn-outline btn-sm" onClick={() => refetch()}>
+            ↻ Refresh
+          </button>
+        </div>
       </div>
 
       {/* ⚡ Quick orders urgent notice */}

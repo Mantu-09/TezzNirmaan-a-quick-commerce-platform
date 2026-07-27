@@ -44,8 +44,11 @@ const STATE_MACHINE = Object.freeze({
     },
     {
       to: ORDER_STATUSES.CANCELLED,
-      allowedRoles: [SHOP_OWNER, SHOP_STAFF, PLATFORM_ADMIN],
-      note: 'Shop cancels after confirming',
+      // P1-B: Customer can cancel a confirmed order up to 30 min after placement,
+      // before the shop starts preparing. The 30-min window is enforced in
+      // cancelOrderByCustomer() in order.service.js, not here.
+      allowedRoles: [CUSTOMER, SHOP_OWNER, SHOP_STAFF, PLATFORM_ADMIN],
+      note: 'Customer cancels within 30-min window, or shop cancels after confirming',
     },
   ],
 

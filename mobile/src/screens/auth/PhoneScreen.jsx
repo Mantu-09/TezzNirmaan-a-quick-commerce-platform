@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PhoneScreen.jsx
  * ─────────────────────────────────────────────────────
  * Step 1 of the auth flow — user enters their 10-digit
@@ -137,6 +137,7 @@ export default function PhoneScreen({ navigation }) {
                 onSubmitEditing={handleSendOtp}
                 error={error}
                 style={styles.inputWrapper}
+                testID="phone-input"
               />
 
               {/* Send OTP button */}
@@ -147,6 +148,7 @@ export default function PhoneScreen({ navigation }) {
                 loading={loading}
                 onPress={handleSendOtp}
                 style={styles.ctaButton}
+                testID="send-otp-btn"
               >
                 Send OTP
               </Button>
