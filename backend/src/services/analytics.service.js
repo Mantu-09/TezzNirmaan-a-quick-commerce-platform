@@ -146,45 +146,28 @@ async function fetchSubOrders(shopId, from, to) {
 }
 
 async function fetchTopProducts(shopId, from, to) {
-  // Aggregate order_items through sub_orders → orders for the shop in this window
-  const { data, error } = await supabaseAdmin
-    .from('order_items')
-    .select(`
-      product_id,
-      product_name,
-      quantity,
-      total_price,
-      sub_orders!inner(
-        orders!inner(shop_id),
-        status,
-        created_at
-      )
-    `)
-    .eq('sub_orders.orders.shop_id', shopId)
-    .eq('sub_orders.status', 'delivered')
-    .gte('sub_orders.created_at', from)
-    .lte('sub_orders.created_at', to);
+  // P7-6: SQL aggregate via RPC — all grouping done in Postgres, not JS.
+  // Replaces previous O(n) JS loop over every order_item row.
+  // RPC defined in migration 046_analytics_rpcs.sql.
+  const { data, error } = await supabaseAdmin.rpc('get_top_products', {
+    p_shop_id: shopId,
+    p_from:    from,
+    p_to:      to,
+    p_limit:   5,
+  });
 
   if (error) {
-    logger.warn('analytics fetchTopProducts error', { error: error.message });
+    logger.warn('analytics fetchTopProducts RPC error', { error: error.message });
     return [];
   }
 
-  // Aggregate client-side (PostgREST can't GROUP BY across nested joins)
-  const map = new Map();
-  for (const item of (data || [])) {
-    const key = item.product_id;
-    if (!map.has(key)) {
-      map.set(key, { productId: key, name: item.product_name, unitsSold: 0, revenue: 0 });
-    }
-    const agg = map.get(key);
-    agg.unitsSold += Number(item.quantity)   || 0;
-    agg.revenue   += Number(item.total_price) || 0;
-  }
-
-  return Array.from(map.values())
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 5);
+  // RPC returns snake_case — map to the camelCase shape the dashboard expects
+  return (data || []).map(r => ({
+    productId:  r.product_id,
+    name:       r.product_name,
+    unitsSold:  Number(r.units_sold),
+    revenue:    Number(r.revenue),
+  }));
 }
 
 async function fetchPeakHours(shopId, from, to) {

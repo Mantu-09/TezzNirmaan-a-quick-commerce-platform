@@ -5,6 +5,106 @@ import { inventoryApi } from '../../../lib/api';
 import ImportCSVModal from '../../../components/inventory/ImportCSVModal'; // P1-D
 import { TableSkeleton } from '../../../components/skeletons'; // P4-2C
 
+// ── P7-5: Image Upload Field ────────────────────────────────
+// Uploads directly to R2 via presigned PUT URL.
+// Backend never receives the image bytes.
+function ImageUploadField({ onUploadComplete, existingUrl }) {
+  const [uploading,   setUploading]   = useState(false);
+  const [previewUrl,  setPreviewUrl]  = useState(existingUrl || null);
+  const [uploadError, setUploadError] = useState(null);
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Basic client-side validation
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Please select an image file (JPEG, PNG, WebP)');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) { // 10 MB limit
+      setUploadError('Image must be under 10 MB');
+      return;
+    }
+
+    setUploading(true);
+    setUploadError(null);
+
+    try {
+      // 1. Get presigned URL from backend
+      const { upload_url, public_url } = await inventoryApi.getImageUploadUrl('products', file.type);
+
+      // 2. PUT directly to R2 — never touches Node.js backend
+      const res = await fetch(upload_url, {
+        method:  'PUT',
+        headers: { 'Content-Type': file.type },
+        body:    file,
+      });
+      if (!res.ok) throw new Error(`Upload failed: HTTP ${res.status}`);
+
+      // 3. Update preview and notify parent
+      setPreviewUrl(public_url);
+      onUploadComplete(public_url);
+    } catch (err) {
+      setUploadError(err.message || 'Upload failed — please retry');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 'var(--s4)' }}>
+      <label style={{ display: 'block', fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
+        Product Image
+        <span style={{ fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 6 }}>(optional)</span>
+      </label>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s3)' }}>
+        {/* Preview thumbnail */}
+        {previewUrl && (
+          <img
+            src={previewUrl}
+            alt="Product preview"
+            style={{
+              width: 72, height: 72, objectFit: 'cover',
+              borderRadius: 8, border: '1px solid var(--border)',
+            }}
+          />
+        )}
+
+        {/* Upload button */}
+        <label style={{
+          display:     'inline-flex',
+          alignItems:  'center',
+          gap:         6,
+          padding:     '8px 16px',
+          borderRadius: 8,
+          border:      '1.5px dashed var(--border)',
+          background:  uploading ? 'var(--surface-2)' : 'transparent',
+          color:       'var(--text)',
+          fontSize:    13,
+          fontWeight:  600,
+          cursor:      uploading ? 'not-allowed' : 'pointer',
+          transition:  'all 0.15s',
+        }}>
+          {uploading ? '⏳ Uploading…' : previewUrl ? '🔄 Change Image' : '📷 Add Image'}
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleFileChange}
+            disabled={uploading}
+            style={{ display: 'none' }}
+          />
+        </label>
+      </div>
+
+      {uploadError && (
+        <p style={{ color: 'var(--error)', fontSize: 12, marginTop: 4 }}>{uploadError}</p>
+      )}
+    </div>
+  );
+}
+
 // ── Inline editable cell ──────────────────────────────────────
 function EditableCell({ value, onSave, type = 'number', prefix = '' }) {
   const [editing, setEditing]  = useState(false);
@@ -69,7 +169,7 @@ function AvailableToggle({ value, onChange }) {
 function AddItemModal({ onClose, onSave }) {
   const [form, setForm] = useState({
     product_name: '', unit: 'bag', price: '', mrp: '', stock_quantity: '',
-    delivery_tier: 'quick',
+    delivery_tier: 'quick', primary_image_url: '', // P7-5
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -83,6 +183,12 @@ function AddItemModal({ onClose, onSave }) {
 
         <label>Product Name</label>
         <input className="input" value={form.product_name} onChange={e => set('product_name', e.target.value)} placeholder="e.g. Ultratech Cement 50kg" style={{ marginBottom: 'var(--s4)' }} />
+
+        {/* P7-5: Image upload */}
+        <ImageUploadField
+          onUploadComplete={(url) => set('primary_image_url', url)}
+          existingUrl={form.primary_image_url}
+        />
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s3)', marginBottom: 'var(--s4)' }}>
           <div>
@@ -123,9 +229,10 @@ function AddItemModal({ onClose, onSave }) {
             className="btn btn-primary"
             onClick={() => onSave({
               ...form,
-              price:          Math.round(Number(form.price) * 100),
-              mrp:            Math.round(Number(form.mrp)   * 100),
-              stock_quantity: Number(form.stock_quantity),
+              price:             Math.round(Number(form.price) * 100),
+              mrp:               Math.round(Number(form.mrp)   * 100),
+              stock_quantity:    Number(form.stock_quantity),
+              primary_image_url: form.primary_image_url || undefined, // P7-5
             })}
             disabled={!form.product_name || !form.price}
           >

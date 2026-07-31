@@ -1,33 +1,34 @@
+// ────────────────────────────────────────────────────────────
+// Auth Middleware — P7-0D
+//
+// Upgraded from getUser() + application-level cache (Phase 6 band-aid)
+// to getClaims() + JWKS caching (correct long-term solution).
+//
+// WHY getClaims() over getUser():
+//   getUser() makes a network round-trip to Supabase Auth on EVERY
+//   request — even with the 5-min TOKEN_CACHE, a cold start or cache
+//   miss means a full HTTP call to https://<project>.supabase.co/auth/v1/user.
+//
+//   getClaims() verifies the JWT locally against the JWKS public keys
+//   fetched from Supabase's /.well-known/jwks.json endpoint. The SDK
+//   caches the JWKS after the first fetch — every subsequent call is a
+//   fast local crypto verify with zero network I/O.
+//
+//   See: https://supabase.com/docs/reference/javascript/auth-getclaims
+//
+// req.user shape (unchanged — no call-site changes needed):
+//   { id: string, role: string, email: string|null, phone: string|null }
+// ────────────────────────────────────────────────────────────
 import { supabaseAdmin } from '../config/supabase.js';
 import { AuthenticationError } from '../utils/errors.js';
-
-/**
- * Short-lived in-memory token cache.
- *
- * Avoids a Supabase Auth network round-trip on every request.
- * After a successful getUser() the result is cached for TTL_MS.
- * On network errors the cache is used as a fallback so transient
- * DNS / timeout failures don't log the user out mid-session.
- *
- * Shape: Map<token, { user: object, expiresAt: number }>
- */
-const TOKEN_CACHE = new Map();
-const TTL_MS     = 5 * 60 * 1000; // 5 minutes
-
-/** Remove stale entries (called lazily on each request). */
-function pruneCache() {
-  const now = Date.now();
-  for (const [key, entry] of TOKEN_CACHE) {
-    if (entry.expiresAt < now) TOKEN_CACHE.delete(key);
-  }
-}
+import logger from '../utils/logger.js';
 
 /**
  * Authentication middleware.
  *
- * Extracts the Bearer token from the Authorization header, verifies it
- * with Supabase Auth (or the local cache), and attaches the user object
- * to `req.user`.
+ * Extracts the Bearer token from the Authorization header and verifies it
+ * using getClaims() — local JWKS verification, no Supabase round-trip after
+ * the first call. Attaches the resolved user object to `req.user`.
  *
  * req.user shape:
  *   { id: string, role: string, email: string|null, phone: string|null }
@@ -48,57 +49,33 @@ export async function authenticate(req, _res, next) {
       throw new AuthenticationError('Missing token');
     }
 
-    pruneCache();
+    // getClaims() verifies the JWT against the cached JWKS public key.
+    // After the first network fetch of the JWKS, all subsequent calls are
+    // fully local (no Supabase round-trip). This replaces the previous
+    // application-level TOKEN_CACHE band-aid from Phase 6.
+    const { data, error } = await supabaseAdmin.auth.getClaims(token);
 
-    // ── 1. Try cache first ────────────────────────────────────────
-    const cached = TOKEN_CACHE.get(token);
-    if (cached && cached.expiresAt > Date.now()) {
-      req.user  = cached.user;
-      req.token = token;
-      return next();
+    if (error || !data?.claims) {
+      logger.debug('Auth: getClaims rejected token', { error: error?.message });
+      throw new AuthenticationError('Invalid or expired token');
     }
 
-    // ── 2. Cache miss → verify with Supabase ─────────────────────
-    let user;
-    try {
-      const { data, error } = await supabaseAdmin.auth.getUser(token);
-      if (error || !data?.user) {
-        // Hard auth failure — token is genuinely invalid, don't cache
-        throw new AuthenticationError('Invalid or expired token');
-      }
-      user = data.user;
-    } catch (networkErr) {
-      // If it's an AuthenticationError we already threw, re-throw it
-      if (networkErr instanceof AuthenticationError) throw networkErr;
+    const claims = data.claims;
 
-      // Network / timeout error — check if we have a stale (recently
-      // expired) cache entry to fall back on rather than logging the
-      // user out completely
-      const stale = TOKEN_CACHE.get(token);
-      if (stale) {
-        req.user  = stale.user;
-        req.token = token;
-        // Extend the stale entry briefly so it survives the blip
-        stale.expiresAt = Date.now() + 60_000; // 1-minute grace
-        return next();
-      }
+    // Build user object — same shape as before so nothing else changes.
+    // Role is in app_metadata (set by admin on user creation) with a
+    // fallback to user_metadata for legacy tokens.
+    const role = claims.app_metadata?.role
+      || claims.user_metadata?.role
+      || 'customer';
 
-      // No cached user at all — we can't trust the token
-      throw new AuthenticationError('Authentication service temporarily unavailable');
-    }
-
-    // ── 3. Build user object & populate cache ────────────────────
-    const role    = user.app_metadata?.role || 'customer';
-    const userObj = {
-      id:    user.id,
+    req.user = {
+      id:    claims.sub,
       role,
-      email: user.email  || null,
-      phone: user.phone  || null,
+      email: claims.email  || null,
+      phone: claims.phone  || null,
     };
 
-    TOKEN_CACHE.set(token, { user: userObj, expiresAt: Date.now() + TTL_MS });
-
-    req.user  = userObj;
     req.token = token;
     next();
 
@@ -106,12 +83,25 @@ export async function authenticate(req, _res, next) {
     if (err instanceof AuthenticationError) {
       next(err);
     } else {
+      logger.error('Auth middleware unexpected error:', { message: err.message });
       next(new AuthenticationError('Authentication failed'));
     }
   }
 }
 
-/** Explicitly evict a token from the cache (call on logout / refresh). */
-export function invalidateToken(token) {
-  TOKEN_CACHE.delete(token);
+/**
+ * Explicitly invalidate a token on logout / token refresh.
+ *
+ * With getClaims() there is no application-level cache to evict —
+ * JWKS verification is stateless. This stub is kept so call-sites in
+ * auth.controller.js (logout) don't need to change.
+ *
+ * For true token revocation, call supabase.auth.signOut() which
+ * invalidates the session on the Supabase side.
+ *
+ * @param {string} _token — ignored, kept for API compatibility
+ */
+export function invalidateToken(_token) {
+  // No-op: getClaims() uses stateless JWKS verification.
+  // Revoke sessions via supabase.auth.signOut() instead.
 }

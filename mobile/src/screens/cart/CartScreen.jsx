@@ -15,6 +15,7 @@ import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
 import useCartStore from '../../store/cartStore';
 import * as ordersApi from '../../api/orders';
 import { getMyPass }  from '../../api/pass'; // P5-3
+import { openSupportChat } from '../../services/freshchat'; // P7-4
 
 // Flat delivery fees matching backend constants (paise)
 const QUICK_FEE     = 4000;   // ₹40
@@ -294,6 +295,15 @@ export default function CartScreen({ navigation }) {
           <Text style={styles.checkoutTotal}>{formatPaise(grandTotal)}</Text>
           <Text style={styles.checkoutItems}>{items.length} item{items.length !== 1 ? 's' : ''}</Text>
         </View>
+        {/* P7-4: Floating help button */}
+        <TouchableOpacity
+          style={styles.helpFab}
+          onPress={() => openSupportChat()}
+          activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color="#fff" />
+        </TouchableOpacity>
         <Button
           variant="primary"
           size="md"
@@ -388,4 +398,16 @@ const styles = StyleSheet.create({
   checkoutTotal: { fontFamily: Typography.fontFamily.bold, fontSize: Typography.size.lg, color: Colors.text },
   checkoutItems: { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: Colors.textSecondary },
   checkoutBtn:   { flex: 1, marginLeft: Spacing[4] },
+
+  // P7-4: Floating help button inside checkout bar
+  helpFab: {
+    width:           38,
+    height:          38,
+    borderRadius:    19,
+    backgroundColor: Colors.primary,
+    alignItems:      'center',
+    justifyContent:  'center',
+    marginRight:     Spacing[2],
+    ...Shadow.sm,
+  },
 });

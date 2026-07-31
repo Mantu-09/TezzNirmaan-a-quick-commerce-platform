@@ -20,6 +20,7 @@ import { useQuery }     from '@tanstack/react-query';
 import { format }       from 'date-fns';
 import { getReturn }    from '../../api/returns';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
+import { openNewConversation } from '../../services/freshchat'; // P7-4
 
 // ── Status pipeline ───────────────────────────────────────────
 const STEPS = [
@@ -238,8 +239,24 @@ export default function ReturnStatusScreen({ route }) {
           <Text style={styles.refreshText}>Refresh status</Text>
         </TouchableOpacity>
 
+        {/* P7-4: Dispute button — only for rejected returns */}
+        {ret.status === 'rejected' && (
+          <TouchableOpacity
+            style={styles.disputeBtn}
+            onPress={() => openNewConversation(
+              `Return dispute: Order #${orderNumber || ret.orders?.order_number}`,
+              `My return was rejected. Reason: ${ret.rejection_reason || 'Not provided'}. ` +
+              `Order #${orderNumber || ret.orders?.order_number}. I would like to escalate this.`,
+            )}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" />
+            <Text style={styles.disputeBtnText}>Dispute this decision</Text>
+          </TouchableOpacity>
+        )}
+
         <Text style={styles.finePrint}>
-          Need help? Contact support via the in-app chat or call the shop directly.
+          Need help? Tap above to chat with us or contact the shop directly.
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -323,6 +340,24 @@ const styles = StyleSheet.create({
   // Refresh
   refreshBtn:  { flexDirection: 'row', alignItems: 'center', gap: Spacing[2], justifyContent: 'center', padding: Spacing[3] },
   refreshText: { fontFamily: Typography.fontFamily.medium, fontSize: Typography.size.sm, color: Colors.primary },
+
+  // P7-4: Dispute button
+  disputeBtn: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    justifyContent:  'center',
+    gap:             Spacing[2],
+    backgroundColor: Colors.error,
+    borderRadius:    BorderRadius.xl,
+    paddingVertical: Spacing[3],
+    marginHorizontal: Spacing[4],
+    marginBottom:    Spacing[3],
+  },
+  disputeBtnText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize:   Typography.size.base,
+    color:      '#fff',
+  },
 
   finePrint: { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: Colors.textTertiary, textAlign: 'center', marginTop: Spacing[2] },
 });

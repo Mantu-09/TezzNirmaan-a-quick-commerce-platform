@@ -19,6 +19,7 @@ import rateLimit from 'express-rate-limit';
 import routes from './routes/index.js';
 import internalRoutes from './routes/internal.routes.js'; // P1-E
 import { errorHandler } from './middleware/errorHandler.js';
+import { responseTimeLogger } from './middleware/responseTime.js'; // P7-6
 import { NotFoundError } from './utils/errors.js';
 import { supabaseAdmin } from './config/supabase.js';
 import { redisPing, isRedisMock } from './config/redis.js';
@@ -150,6 +151,11 @@ app.get('/health', async (_req, res) => {
     },
   });
 });
+
+// ── P7-6: Response Time Logger ───────────────────────────
+// Structured perf log for every request. Warns on > 500ms.
+// Mounted after morgan (both loggers run) and before routes.
+app.use(responseTimeLogger);
 
 // ── API Routes ────────────────────────────────
 app.use('/api/v1', routes);

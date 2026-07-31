@@ -1,15 +1,14 @@
 // ────────────────────────────────────────────────────────────
-// ProductImage — P0-D (TD-05)
+// ProductImage — P7-5: CDN Image Delivery
 //
-// A consistent image component for all product images across
-// the app. Wraps expo-image with:
-//   • Automatic placeholder fallback
-//   • Skeleton shimmer while loading
-//   • Graceful error state (broken icon)
-//   • Consistent contentFit and transition defaults
+// Enhanced from P0-D:
+//   • Resolves both legacy Supabase Storage URLs and new R2 CDN keys
+//   • Blurhash placeholder for near-instant perceived load
+//   • Memory + disk cache (expo-image handles CDN headers efficiently)
+//   • All existing features preserved: skeleton shimmer, error state
 //
 // Usage:
-//   <ProductImage uri={product.images?.[0]} style={styles.img} />
+//   <ProductImage uri={product.primary_image_url || product.images?.[0]} style={...} />
 // ────────────────────────────────────────────────────────────
 import React, { useState } from 'react';
 import { View, StyleSheet, Animated } from 'react-native';
@@ -20,14 +19,36 @@ import { Colors, BorderRadius } from '../../theme';
 // Shared placeholder asset — single require so Metro bundles it once
 const PLACEHOLDER = require('../../../assets/placeholder.png');
 
+// Generic product blurhash — low-saturation warm grey (matches most product photos)
+// Generate custom per-image blurhash server-side for production, or use this as default
+const DEFAULT_BLURHASH = 'L6PZfSi_.AyE_3t7t7R**0o#DgR4';
+
+// CDN base URL from env (set EXPO_PUBLIC_R2_CDN_URL in .env)
+const CDN_URL = process.env.EXPO_PUBLIC_R2_CDN_URL || '';
+
+/**
+ * Resolve a stored key/URL into an absolute URL for expo-image.
+ * Handles:
+ *   1. null/undefined → null (placeholder shown)
+ *   2. Full URL (http/https) → used as-is (legacy Supabase Storage or already CDN)
+ *   3. R2 key (e.g. "products/uuid.jpg") → CDN_URL/key
+ */
+function resolveImageUrl(uri) {
+  if (!uri) return null;
+  if (uri.startsWith('http://') || uri.startsWith('https://')) return uri;
+  if (CDN_URL) return `${CDN_URL}/${uri}`;
+  return null; // CDN_URL not set — fall back to placeholder
+}
+
 /**
  * ProductImage
  *
- * @param {string|null}  uri          - Remote image URL (can be null/undefined)
+ * @param {string|null}  uri          - Image URL or R2 key (can be null/undefined)
  * @param {object}       style        - Additional styles for the image (width/height)
  * @param {'cover'|'contain'} contentFit - expo-image contentFit (default: 'cover')
  * @param {number}       transition   - Fade-in duration in ms (default: 200)
  * @param {boolean}      showSkeleton - Show shimmer skeleton while loading (default: true)
+ * @param {string}       blurhash     - Custom blurhash for this image (optional)
  */
 export default function ProductImage({
   uri,
@@ -35,11 +56,13 @@ export default function ProductImage({
   contentFit   = 'cover',
   transition   = 200,
   showSkeleton = true,
+  blurhash,
 }) {
   const [loading, setLoading] = useState(true);
   const [errored, setErrored] = useState(false);
 
-  const source = !errored && uri ? { uri } : PLACEHOLDER;
+  const resolvedUrl = resolveImageUrl(uri);
+  const source = !errored && resolvedUrl ? { uri: resolvedUrl } : PLACEHOLDER;
 
   return (
     <View style={[styles.wrapper, style]}>
@@ -48,12 +71,14 @@ export default function ProductImage({
         style={StyleSheet.absoluteFill}
         contentFit={contentFit}
         transition={transition}
+        // P7-5: blurhash placeholder — shown instantly while network fetches CDN image
+        placeholder={{ blurhash: blurhash || DEFAULT_BLURHASH }}
         onLoadStart={() => { setLoading(true); setErrored(false); }}
         onLoad={() => setLoading(false)}
         onError={() => { setLoading(false); setErrored(true); }}
-        // Prioritise cache — most product images are repeated across screens
+        // memory-disk cache — expo-image respects CDN Cache-Control headers
         cachePolicy="memory-disk"
-        recyclingKey={uri || 'placeholder'}
+        recyclingKey={resolvedUrl || 'placeholder'}
       />
 
       {/* Broken image indicator — shown if remote URL fails */}

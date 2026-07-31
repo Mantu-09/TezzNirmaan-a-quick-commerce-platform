@@ -107,6 +107,12 @@ router.get  ('/shop/returns/:returnId',             ...shopAccess, ret.getShopRe
 router.patch('/shop/returns/:returnId/approve',    ...ownerOnly,  validate(approveReturnSchema), ret.approveReturn);
 router.patch('/shop/returns/:returnId/reject',     ...ownerOnly,  validate(rejectReturnSchema),  ret.rejectReturn);
 
+// ── P7-5: CDN Image Upload (Presigned URL) ────────────────────
+// POST /shop/images/upload-url → { upload_url, public_url, key }
+// Client uploads bytes directly to R2 — never passes through Node.js
+import * as img from '../controllers/image.controller.js';
+router.post('/shop/images/upload-url', ...shopAccess, img.getImageUploadUrl);
+
 export default router;
 
 

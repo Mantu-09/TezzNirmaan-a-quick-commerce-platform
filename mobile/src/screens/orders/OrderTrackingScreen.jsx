@@ -42,6 +42,7 @@ import { estimateCashback }    from '../../api/cashback';
 import { useNavigation }       from '@react-navigation/native';
 import useAuthStore             from '../../store/authStore';
 import { wsClient }            from '../../services/websocket';  // P5-1
+import { openSupportChat }     from '../../services/freshchat';  // P7-4
 
 // ── Map (optional dep) ────────────────────────────────────────
 let MapView = null;
@@ -520,7 +521,6 @@ export default function OrderTrackingScreen({ route, navigation }) {
           </View>
         )}
 
-        {/* P6-3: Request Return button — visible only for eligible sub-orders */}
         {returnEligible && (
           <Button
             variant="outline"
@@ -538,6 +538,16 @@ export default function OrderTrackingScreen({ route, navigation }) {
             🔄 Request Return / Refund
           </Button>
         )}
+
+        {/* P7-4: Need help? — visible once order is placed */}
+        <TouchableOpacity
+          style={styles.helpLink}
+          onPress={() => openSupportChat({ order_number: order?.order_number })}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={15} color={Colors.primary} />
+          <Text style={styles.helpLinkText}>Need help with this order?</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       {/* Rating sheet */}
@@ -678,4 +688,16 @@ const styles = StyleSheet.create({
   cashbackBannerSub:   { fontFamily: Typography.fontFamily.regular, fontSize: Typography.size.xs, color: '#4B7A5A', marginTop: 2 },
   cashbackViewBtn:     { flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-end' },
   cashbackViewBtnText: { fontFamily: Typography.fontFamily.semiBold, fontSize: Typography.size.xs, color: Colors.success },
+
+  // P7-4: Help link
+  helpLink: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing[2], paddingVertical: Spacing[4], marginTop: Spacing[2],
+  },
+  helpLinkText: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize:   Typography.size.sm,
+    color:      Colors.primary,
+    textDecorationLine: 'underline',
+  },
 });

@@ -13,8 +13,10 @@
 //   enable the queue.
 //
 // DATABASE_URL format:
-//   postgresql://postgres.[ref]:[password]@aws-0-ap-south-1.pooler.supabase.com:6543/postgres
-//   (Transaction mode pooler — find in Supabase → Project Settings → Database → Connection Pooling)
+//   postgresql://postgres.[ref]:[password]@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
+//   (Session mode pooler, port 5432 — find in Supabase → Connect → Session pooler)
+//   DO NOT use Transaction pooler (port 6543) — pg-boss holds persistent
+//   connections which are incompatible with transaction-mode pooling.
 // ────────────────────────────────────────────────────────────
 import { supabaseAdmin } from '../config/supabase.js';
 import logger from '../utils/logger.js';

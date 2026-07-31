@@ -1,14 +1,31 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import useAuthStore from '../../store/authStore';
+import { supportApi, jobsApi } from '../../lib/api';
 
 export default function AdminLayout({ children }) {
   const { role } = useAuthStore();
   const router = useRouter();
   const pathname = usePathname();
+  const [unreadCount,    setUnreadCount]    = useState(0); // P7-4: Freshchat badge
+  const [failedJobCount, setFailedJobCount] = useState(0); // P7-7: DLQ badge
+
+  // P7-4: Fetch open conversation count from Freshchat REST API
+  useEffect(() => {
+    supportApi.getUnreadCount()
+      .then(count => setUnreadCount(count))
+      .catch(() => {}); // non-fatal — badge stays at 0 if API call fails
+  }, []);
+
+  // P7-7: Fetch total failed job count for sidebar badge
+  useEffect(() => {
+    jobsApi.getFailedJobs({ limit: 1 })
+      .then(res => setFailedJobCount(res?.data?.totalFailed || 0))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (role && role !== 'platform_admin') {
@@ -27,6 +44,7 @@ export default function AdminLayout({ children }) {
     { href: '/admin/promos',         label: 'Promos',    icon: '🏷️' }, // P1-C
     { href: '/admin/cities',         label: 'Cities',    icon: '🏙️' }, // P4-4A
     { href: '/admin/shop-interests', label: 'Leads',     icon: '📋' }, // P5-0D Bug 5
+    { href: '/admin/jobs',           label: 'Jobs',      icon: '⚙️', badge: failedJobCount }, // P7-7
   ];
 
   const isActive = (href) => pathname === href || pathname.startsWith(href + '/');
@@ -116,13 +134,81 @@ export default function AdminLayout({ children }) {
                     : '1px solid transparent',
                   textDecoration: 'none',
                   transition: 'all 0.15s ease',
+                  position: 'relative',
                 }}
               >
                 <span>{link.icon}</span>
                 {link.label}
+                {/* P7-7: Red badge for failed jobs */}
+                {link.badge > 0 && (
+                  <span style={{
+                    position:        'absolute',
+                    top:             -6,
+                    right:           -6,
+                    minWidth:        18,
+                    height:          18,
+                    borderRadius:    9,
+                    backgroundColor: '#ef4444',
+                    color:           '#fff',
+                    fontSize:        10,
+                    fontWeight:      700,
+                    display:         'flex',
+                    alignItems:      'center',
+                    justifyContent:  'center',
+                    padding:         '0 4px',
+                    animation:       'dlq-pulse 1.5s ease-in-out infinite',
+                  }}>
+                    {link.badge > 99 ? '99+' : link.badge}
+                  </span>
+                )}
               </Link>
             ))}
           </nav>
+
+          {/* P7-4: Freshchat Support Inbox link */}
+          <a
+            href="https://web.freshchat.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display:        'flex',
+              alignItems:     'center',
+              gap:            6,
+              padding:        '6px 14px',
+              borderRadius:   'var(--r-md)',
+              fontSize:       13,
+              fontWeight:     600,
+              color:          'rgba(255,255,255,0.85)',
+              background:     'rgba(255,255,255,0.08)',
+              border:         '1px solid rgba(255,255,255,0.18)',
+              textDecoration: 'none',
+              transition:     'all 0.15s ease',
+              position:       'relative',
+            }}
+          >
+            <span>💬</span>
+            Support
+            {unreadCount > 0 && (
+              <span style={{
+                position:        'absolute',
+                top:             -6,
+                right:           -6,
+                minWidth:        18,
+                height:          18,
+                borderRadius:    9,
+                backgroundColor: '#EF4444',
+                color:           '#fff',
+                fontSize:        10,
+                fontWeight:      700,
+                display:         'flex',
+                alignItems:      'center',
+                justifyContent:  'center',
+                padding:         '0 4px',
+              }}>
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </a>
 
           {/* Spacer */}
           <div style={{ flex: 1 }} />

@@ -44,16 +44,34 @@ let io = null;
 // ── Auth middleware factory ───────────────────────────────────
 // Verifies the Supabase JWT passed via socket.handshake.auth.token.
 // Attaches socket.userId and socket.userRole on success.
+//
+// P7-3: Upgraded from getUser() (network round-trip to Supabase Auth on
+// every connection) to getClaims() (local JWKS crypto after the first fetch).
+// This is especially impactful for WebSocket connections — the handshake auth
+// check happens once per connection, but at scale (1000 concurrent riders +
+// customers) it would previously generate 1000 auth network calls per server
+// restart. getClaims() makes all of these local after the first JWKS fetch.
 function makeAuthMiddleware() {
   return async (socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication required'));
 
     try {
-      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-      if (error || !user) return next(new Error('Invalid or expired token'));
-      socket.userId   = user.id;
-      socket.userRole = socket.handshake.auth?.role || 'customer';
+      // P7-3: getClaims() — local JWKS verification, no Supabase network call.
+      // Temporary timing log: measures JWKS cache warm-up vs cold-start latency.
+      // Remove after performance baseline is documented.
+      const start = Date.now();
+      const { data, error } = await supabaseAdmin.auth.getClaims(token);
+      logger.info(`Socket.IO getClaims() took ${Date.now() - start}ms`);
+
+      if (error || !data?.claims) {
+        logger.warn('Socket.IO auth: getClaims rejected token', { error: error?.message });
+        return next(new Error('Invalid or expired token'));
+      }
+
+      const claims = data.claims;
+      socket.userId   = claims.sub;
+      socket.userRole = claims.app_metadata?.role || socket.handshake.auth?.role || 'customer';
       next();
     } catch (err) {
       logger.warn('Socket.IO auth failed', { error: err.message });

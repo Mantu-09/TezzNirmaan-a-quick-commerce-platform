@@ -171,6 +171,10 @@ export const inventoryApi = {
 
   // P1-D: Download CSV template
   downloadTemplate: () => `${BASE}/shop/inventory/bulk-template`,
+
+  // P7-5: Get presigned R2 upload URL for product images
+  getImageUploadUrl: (folder = 'products', contentType = 'image/jpeg') =>
+    api.post('/shop/images/upload-url', { folder, content_type: contentType }),
 };
 
 // ── Shop Settings ─────────────────────────────────────────────
@@ -273,5 +277,57 @@ export const returnsApi = {
   reject: (id, body) => api.patch(`/shop/returns/${id}/reject`, body),
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// P7-4: Freshchat REST API — read-only, for Support Inbox badge count only.
+//
+// The token is a Freshchat API token (not the user's JWT).
+// Get it: Freshchat dashboard → Settings → API → Create token.
+// Set FRESHCHAT_API_TOKEN in dashboard environment variables.
+//
+// IMPORTANT: This is a server-side token. Do NOT expose it client-side in
+// production. For Next.js, move this call to a /api/support-count route.
+// ─────────────────────────────────────────────────────────────────────────────
+export const supportApi = {
+  /**
+   * Fetch the count of open (unresolved) conversations from Freshchat.
+   * Returns 0 if the API token is not configured or the call fails.
+   *
+   * @returns {Promise<number>}
+   */
+  getUnreadCount: async () => {
+    const token = process.env.FRESHCHAT_API_TOKEN ||
+                  process.env.NEXT_PUBLIC_FRESHCHAT_API_TOKEN;
+    if (!token) return 0;
 
+    try {
+      const res = await fetch(
+        'https://api.freshchat.com/v2/conversations?status=open&per_page=1',
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          // Cache for 60s to avoid hammering the Freshchat API on every page load
+          next: { revalidate: 60 },
+        }
+      );
+      if (!res.ok) return 0;
+      const data = await res.json();
+      return data?.meta?.total_count || 0;
+    } catch {
+      return 0;
+    }
+  },
+};
 
+// ── Job Queue / DLQ — P7-7 ────────────────────────────────────
+export const jobsApi = {
+  // GET /admin/jobs/failed?queue=send-notification&page=1&limit=20
+  getFailedJobs: (params = {}) => api.get(`/admin/jobs/failed${qs(params)}`),
+  // POST /admin/jobs/:jobId/retry
+  retryJob:      (jobId)       => api.post(`/admin/jobs/${jobId}/retry`),
+  // POST /admin/jobs/retry-all  { queue }
+  retryAll:      (queue)       => api.post('/admin/jobs/retry-all', { queue }),
+  // DELETE /admin/jobs/:jobId
+  discardJob:    (jobId)       => api.delete(`/admin/jobs/${jobId}`),
+};

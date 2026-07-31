@@ -33,6 +33,10 @@ import {
 } from './src/services/notifications';                                // P1-A
 import { savePushToken } from './src/api/auth';                       // P1-A
 import { useOTAUpdate }  from './src/hooks/useOTAUpdate';              // P4-1B
+import {
+  initFreshchat,
+  identifyUser as freshchatIdentify,
+} from './src/services/freshchat';                                     // P7-4
 
 // B7: Initialise Sentry BEFORE any other code (catches startup crashes)
 initSentry();
@@ -63,7 +67,16 @@ export const navigationRef = React.createRef();
 function App() {
   const [fontsLoaded, setFontsLoaded] = React.useState(false);
   const syncCart   = useCartStore(s => s.syncFromServer);
-  const { isAuthenticated, token } = useAuthStore();
+  const { isAuthenticated, token, user } = useAuthStore();
+
+  // ── P7-4: Freshchat init (support chat) ───────────────────
+  // Initialise once on mount — safe when env vars not set (silent no-op).
+  useEffect(() => { initFreshchat(); }, []);
+
+  // Identify the user whenever auth state changes
+  useEffect(() => {
+    if (isAuthenticated && user) freshchatIdentify(user);
+  }, [isAuthenticated, user]);
 
   // ── Font loading ───────────────────────────────────────────
   useEffect(() => {

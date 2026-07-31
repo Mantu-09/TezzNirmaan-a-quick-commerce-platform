@@ -22,6 +22,9 @@ import {
 import * as cashbackCtrl from '../controllers/cashback.controller.js'; // P4-2B
 import * as st           from '../controllers/settlement.controller.js'; // P4-4B
 
+import * as b2bAdmin  from '../controllers/b2b.controller.js';
+import * as jobsCtrl  from '../controllers/jobs.controller.js'; // P7-7
+
 const router   = Router();
 const adminOnly = [authenticate, requireRole('platform_admin')];
 
@@ -94,8 +97,6 @@ router.patch('/admin/settlements/:batchId/paid',    ...adminOnly, st.markPaid);
 router.post ('/admin/settlements/generate',         ...adminOnly, st.triggerSettlement);
 
 // ── B2B / Contractor Accounts (P6-6) ─────────────────────────────
-import * as b2bAdmin from '../controllers/b2b.controller.js';
-
 // GET    /admin/b2b/applications?status=pending|verified|rejected
 router.get  ('/admin/b2b/applications',                         ...adminOnly, b2bAdmin.listApplications);
 // PATCH  /admin/b2b/applications/:id/approve  { creditLimitPaise, paymentTermsDays, discountPercent }
@@ -106,5 +107,12 @@ router.patch('/admin/b2b/applications/:contractorId/reject',    ...adminOnly, b2
 router.get  ('/admin/b2b/outstanding',                          ...adminOnly, b2bAdmin.listOutstanding);
 // PATCH  /admin/b2b/orders/:b2bOrderId/paid  — mark credit payment received
 router.patch('/admin/b2b/orders/:b2bOrderId/paid',              ...adminOnly, b2bAdmin.markPaid);
+
+// ── Job Queue / DLQ Dashboard (P7-7) ─────────────────────────
+// NOTE: /failed and /retry-all must come before /:jobId to avoid shadowing
+router.get   ('/admin/jobs/failed',           ...adminOnly, jobsCtrl.getFailedJobs);
+router.post  ('/admin/jobs/retry-all',        ...adminOnly, jobsCtrl.retryAllJobs);
+router.post  ('/admin/jobs/:jobId/retry',     ...adminOnly, jobsCtrl.retryJob);
+router.delete('/admin/jobs/:jobId',           ...adminOnly, jobsCtrl.discardJob);
 
 export default router;

@@ -10,6 +10,7 @@ import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
 import useAuthStore from '../../store/authStore';
 import useCityStore from '../../store/cityStore'; // P4-4A
 import client from '../../api/client'; // P5-4C
+import { openSupportChat } from '../../services/freshchat'; // P7-4
 
 const VERSION = '1.0.0';
 
@@ -22,7 +23,7 @@ export default function ProfileScreen({ navigation }) {
     { id: 'addresses', icon: 'location-outline',    label: 'Saved Addresses',  sub: 'Manage delivery addresses'  },
     { id: 'city',      icon: 'map-outline',         label: 'Change City',      sub: selectedCity?.name ? `Currently: ${selectedCity.name}` : 'Select a city' }, // P4-4A
     { id: 'settings',  icon: 'settings-outline',    label: 'Account Settings', sub: 'Coming soon'                },
-    { id: 'help',      icon: 'help-circle-outline', label: 'Help & Support',   sub: 'Coming soon'                },
+    { id: 'help',      icon: 'help-circle-outline', label: 'Help & Support',   sub: 'Chat with us instantly'     }, // P7-4
   ];
 
   // Get profile to show full name
@@ -45,8 +46,10 @@ export default function ProfileScreen({ navigation }) {
       case 'city': // P4-4A
         navigation.navigate('CitySelectGate', { postAuth: true });
         break;
+      case 'help': // P7-4
+        openSupportChat();
+        break;
       case 'settings':
-      case 'help':
         Alert.alert('Coming Soon', 'This feature is under development.');
         break;
     }
