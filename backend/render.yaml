@@ -1,24 +1,26 @@
-# TezzNirmaan Backend — render.yaml
+# TezzNirmaan Backend — render.yaml (P8-1: Staging + Production)
 # Render.com infrastructure-as-code configuration
 # Docs: https://render.com/docs/blueprint-spec
+#
+# Two services:
+#   tezznirmaan-api          — production  (live traffic)
+#   tezznirmaan-api-staging  — staging     (deploy gate before production)
+#
+# Both services use the same repo/branch. Only env vars differ.
+# Staging uses Razorpay TEST mode keys and the staging Supabase project.
 
 services:
+  # ── Production ─────────────────────────────────────────────
   - type: web
     name: tezznirmaan-api
     runtime: node
     region: singapore   # Closest to India (Patna) with low latency
     plan: starter       # $7/month — upgrade to standard once live
 
-    # Build command
     buildCommand: npm install --production
-
-    # Start command
     startCommand: npm start
+    autoDeploy: false   # P8-1: Never auto-deploy to prod — CI pipeline deploys via hook
 
-    # Auto-deploy on push to main branch
-    autoDeploy: true
-
-    # Health check — Render will restart if this returns non-200
     healthCheckPath: /health
 
     envVars:
@@ -28,9 +30,9 @@ services:
       - key: PORT
         value: 3000
 
-      # Supabase — set these in Render Dashboard (never commit values)
+      # Supabase PRODUCTION — set in Render Dashboard (never commit values)
       - key: SUPABASE_URL
-        sync: false   # means: "I'll set this manually in the dashboard"
+        sync: false
 
       - key: SUPABASE_ANON_KEY
         sync: false
@@ -38,7 +40,11 @@ services:
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
 
-      # Razorpay — set in Render Dashboard
+      # pg-boss: SESSION pooler (port 5432, NOT 6543)
+      - key: DATABASE_URL
+        sync: false
+
+      # Razorpay LIVE keys
       - key: RAZORPAY_KEY_ID
         sync: false
 
@@ -48,7 +54,143 @@ services:
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
 
-      # CORS — set to your frontend domains
-      # e.g. "https://tezznirmaan.com,https://app.tezznirmaan.com"
+      # CORS — production domains
       - key: CORS_ORIGIN
+        sync: false
+
+      # Optional — see .env.example for full list
+      - key: REDIS_URL
+        sync: false
+
+      - key: TYPESENSE_HOST
+        sync: false
+
+      - key: TYPESENSE_ADMIN_API_KEY
+        sync: false
+
+      - key: TYPESENSE_SEARCH_API_KEY
+        sync: false
+
+      - key: R2_ACCOUNT_ID
+        sync: false
+
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+
+      - key: R2_BUCKET_NAME
+        value: tezznirmaan-images
+
+      - key: R2_CDN_URL
+        value: https://images.tezznirmaan.in
+
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      - key: FAST2SMS_API_KEY
+        sync: false
+
+      - key: EXPO_ACCESS_TOKEN
+        sync: false
+
+      - key: FRESHCHAT_API_TOKEN
+        sync: false
+
+      - key: JWT_SECRET
+        sync: false
+
+  # ── Staging ────────────────────────────────────────────────
+  # Zero cost: Render free tier (spins down after 15 min idle — fine for staging)
+  # All vars point at tezznirmaan-staging Supabase project + Razorpay TEST mode.
+  - type: web
+    name: tezznirmaan-api-staging
+    runtime: node
+    region: singapore
+    plan: free          # Free tier — staging doesn't need to be always-on
+
+    buildCommand: npm install --production
+    startCommand: npm start
+    autoDeploy: false   # CI pipeline triggers this via RENDER_STAGING_DEPLOY_HOOK secret
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: staging
+
+      - key: PORT
+        value: 3000
+
+      # Supabase STAGING — separate project (tezznirmaan-staging)
+      - key: SUPABASE_URL
+        sync: false     # Set to staging project URL in Render Dashboard
+
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # Staging SESSION pooler (separate staging Supabase project)
+      - key: DATABASE_URL
+        sync: false
+
+      # Razorpay TEST mode keys (NOT live keys — staging never charges real money)
+      - key: RAZORPAY_KEY_ID
+        sync: false     # Must be rzp_test_* key
+
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+
+      # CORS — staging dashboard URL
+      - key: CORS_ORIGIN
+        sync: false     # e.g. https://tezznirmaan-dashboard-git-main-xxx.vercel.app
+
+      # Optional — same Upstash/Typesense/R2 instance is OK for staging
+      # or leave blank to run in degraded mode (sufficient for smoke tests)
+      - key: REDIS_URL
+        sync: false
+
+      - key: TYPESENSE_HOST
+        sync: false
+
+      - key: TYPESENSE_ADMIN_API_KEY
+        sync: false
+
+      - key: TYPESENSE_SEARCH_API_KEY
+        sync: false
+
+      - key: R2_ACCOUNT_ID
+        sync: false
+
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+
+      - key: R2_BUCKET_NAME
+        value: tezznirmaan-images-staging  # separate bucket so staging doesn't pollute CDN
+
+      - key: R2_CDN_URL
+        value: https://images.tezznirmaan.in  # can share CDN or point at staging bucket
+
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+      - key: FAST2SMS_API_KEY
+        sync: false     # Leave blank in staging — don't send real SMS to test numbers
+
+      - key: EXPO_ACCESS_TOKEN
+        sync: false
+
+      - key: FRESHCHAT_API_TOKEN
+        sync: false
+
+      - key: JWT_SECRET
         sync: false

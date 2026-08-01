@@ -331,3 +331,24 @@ export const jobsApi = {
   // DELETE /admin/jobs/:jobId
   discardJob:    (jobId)       => api.delete(`/admin/jobs/${jobId}`),
 };
+
+// ── Push Campaigns — P8-3 ─────────────────────────────────────
+export const campaignsApi = {
+  // GET  /admin/campaigns?status=draft|scheduled|sent&page=1&limit=20
+  list:     (params = {})        => api.get(`/admin/campaigns${qs(params)}`),
+  // POST /admin/campaigns  { title, body, audience, ... }
+  create:   (data)               => api.post('/admin/campaigns', data),
+  // GET  /admin/campaigns/:id
+  get:      (id)                 => api.get(`/admin/campaigns/${id}`),
+  // PATCH /admin/campaigns/:id
+  update:   (id, data)           => api.patch(`/admin/campaigns/${id}`, data),
+  // GET  /admin/campaigns/preview?audience=all_customers&city_id=<uuid>
+  preview:  (audience, city_id)  => api.get(`/admin/campaigns/preview${qs({ audience, city_id })}`),
+  // POST /admin/campaigns/:id/schedule  { scheduled_at }
+  schedule: (id, scheduled_at)   => api.post(`/admin/campaigns/${id}/schedule`, { scheduled_at }),
+  // POST /admin/campaigns/:id/send-now  → 202 Accepted
+  sendNow:  (id)                 => api.post(`/admin/campaigns/${id}/send-now`),
+  // POST /admin/campaigns/:id/cancel
+  cancel:   (id)                 => api.post(`/admin/campaigns/${id}/cancel`),
+};
+

@@ -17,10 +17,10 @@
 //      + "View Cart" CTA
 //   3. Price changes detected → price-change warning modal before Cart
 // ────────────────────────────────────────────────────────────
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, Modal, ScrollView, Animated,
+  ActivityIndicator, Modal, ScrollView, Animated, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
@@ -312,6 +312,54 @@ function BasketCard({ basketId, orders, onPressOrder }) {
   );
 }
 
+// ── Filter constants ──────────────────────────────────────────
+const STATUS_FILTERS = [
+  { label: 'All',       value: null },
+  { label: 'Pending',   value: 'pending' },
+  { label: 'Delivered', value: 'delivered' },
+  { label: 'Cancelled', value: 'cancelled' },
+];
+
+// ── ReorderReminderCard ───────────────────────────────────────
+function ReorderReminderCard({ order, onReorder, reordering }) {
+  // Find the primary item with a reminder_days value
+  const primaryItem = order.sub_orders?.[0]?.order_items?.find(
+    item => item.reminder_days != null
+  );
+  if (!primaryItem) return null;
+
+  // Calculate how many days since the order was placed
+  const orderDate = new Date(order.created_at);
+  const daysSince = Math.floor((Date.now() - orderDate) / (1000 * 60 * 60 * 24));
+  if (daysSince < primaryItem.reminder_days) return null;
+
+  return (
+    <View style={styles.reminderCard}>
+      <View style={styles.reminderIconWrap}>
+        <Text style={styles.reminderEmoji}>📦</Text>
+      </View>
+      <View style={styles.reminderBody}>
+        <Text style={styles.reminderProduct} numberOfLines={1}>
+          {primaryItem.product_name}
+        </Text>
+        <Text style={styles.reminderSub}>
+          Ordered {daysSince} days ago — Running low?
+        </Text>
+      </View>
+      <TouchableOpacity
+        style={[styles.reminderCta, reordering && styles.reorderBtnLoading]}
+        onPress={onReorder}
+        disabled={reordering}
+      >
+        {reordering
+          ? <ActivityIndicator size="small" color="#fff" />
+          : <Text style={styles.reminderCtaText}>Order Again →</Text>
+        }
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 // ── Main Screen ───────────────────────────────────────────────
 export default function OrderHistoryScreen({ navigation }) {
   const queryClient = useQueryClient();
@@ -325,11 +373,24 @@ export default function OrderHistoryScreen({ navigation }) {
   // Toast state
   const [toast,        setToast]        = useState({ visible: false, message: '' });
 
+  // Search + filter state (P8-6)
+  const [searchText,   setSearchText]   = useState('');
+  const [statusFilter, setStatusFilter] = useState(null); // null = All
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const searchTimer = useRef(null);
+
+  const handleSearchChange = useCallback((text) => {
+    setSearchText(text);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => setDebouncedSearch(text), 400);
+  }, []);
+
   const {
     data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage,
   } = useInfiniteQuery({
-    queryKey:          ['orders'],
-    queryFn:           ({ pageParam = 1 }) => ordersApi.getOrders(pageParam),
+    queryKey:          ['orders', debouncedSearch, statusFilter],
+    queryFn:           ({ pageParam = 1 }) =>
+      ordersApi.getOrders(pageParam, { search: debouncedSearch, status: statusFilter }),
     getNextPageParam:  (last, pages) => last?.pagination?.hasMore ? pages.length + 1 : undefined,
     staleTime:         60 * 1000,
   });
@@ -421,14 +482,21 @@ export default function OrderHistoryScreen({ navigation }) {
         />
       );
     }
-    // Single-shop order (no basket_id)
+    // Single-shop order — show reminder card if applicable
     return (
-      <OrderCard
-        order={item}
-        onPress={() => navigation.navigate('OrderTracking', { orderId: item.id })}
-        onReorder={() => handleReorder(item)}
-        reordering={reorderingId === item.id}
-      />
+      <View>
+        <OrderCard
+          order={item}
+          onPress={() => navigation.navigate('OrderTracking', { orderId: item.id })}
+          onReorder={() => handleReorder(item)}
+          reordering={reorderingId === item.id}
+        />
+        <ReorderReminderCard
+          order={item}
+          onReorder={() => handleReorder(item)}
+          reordering={reorderingId === item.id}
+        />
+      </View>
     );
   }, [navigation, handleReorder, reorderingId]);
 
@@ -462,6 +530,48 @@ export default function OrderHistoryScreen({ navigation }) {
       {/* Success toast */}
       <SuccessToast visible={toast.visible} message={toast.message} />
 
+      {/* ── Search bar (P8-6) ── */}
+      <View style={styles.searchRow}>
+        <View style={styles.searchBox}>
+          <Ionicons name="search-outline" size={16} color={Colors.textSecondary} />
+          <TextInput
+            style={styles.searchInput}
+            value={searchText}
+            onChangeText={handleSearchChange}
+            placeholder="Search by product or order #"
+            placeholderTextColor={Colors.textTertiary}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+          />
+          {searchText.length > 0 && (
+            <TouchableOpacity onPress={() => { setSearchText(''); setDebouncedSearch(''); }}>
+              <Ionicons name="close-circle" size={16} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* ── Status filter chips (P8-6) ── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterContent}
+      >
+        {STATUS_FILTERS.map(f => (
+          <TouchableOpacity
+            key={String(f.value)}
+            style={[styles.filterChip, statusFilter === f.value && styles.filterChipActive]}
+            onPress={() => setStatusFilter(f.value)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.filterChipText, statusFilter === f.value && styles.filterChipTextActive]}>
+              {f.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
       <FlatList
         data={listItems}
         keyExtractor={item => item.key}
@@ -469,6 +579,18 @@ export default function OrderHistoryScreen({ navigation }) {
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         ListFooterComponent={renderFooter}
+        ListEmptyComponent={
+          !isLoading ? (
+            <View style={styles.emptySearch}>
+              <Text style={styles.emptySearchIcon}>🔍</Text>
+              <Text style={styles.emptySearchText}>
+                {debouncedSearch
+                  ? `No orders matching "${debouncedSearch}"`
+                  : 'No orders yet'}
+              </Text>
+            </View>
+          ) : null
+        }
         onEndReached={() => hasNextPage && fetchNextPage()}
         onEndReachedThreshold={0.3}
       />
@@ -487,6 +609,99 @@ export default function OrderHistoryScreen({ navigation }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
   list: { padding: Spacing[4], paddingBottom: Spacing[8] },
+
+  // Search bar (P8-6)
+  searchRow: {
+    paddingHorizontal: Spacing[4],
+    paddingTop: Spacing[3],
+    paddingBottom: Spacing[2],
+  },
+  searchBox: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing[3], paddingVertical: Spacing[2],
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  searchInput: {
+    flex: 1,
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.size.sm,
+    color: Colors.text,
+    paddingVertical: 2,
+  },
+
+  // Filter chips (P8-6)
+  filterScroll:  { flexGrow: 0 },
+  filterContent: { paddingHorizontal: Spacing[4], paddingBottom: Spacing[3], gap: Spacing[2] },
+  filterChip: {
+    paddingHorizontal: Spacing[4], paddingVertical: Spacing[2],
+    borderRadius: BorderRadius.full,
+    backgroundColor: Colors.surface,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  filterChipActive: {
+    backgroundColor: Colors.primary, borderColor: Colors.primary,
+  },
+  filterChipText: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.size.sm,
+    color: Colors.textSecondary,
+  },
+  filterChipTextActive: { color: '#fff' },
+
+  // Empty search state
+  emptySearch: { alignItems: 'center', paddingVertical: Spacing[10] },
+  emptySearchIcon: { fontSize: 36, marginBottom: Spacing[3] },
+  emptySearchText: {
+    fontFamily: Typography.fontFamily.medium,
+    fontSize: Typography.size.md,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+
+  // Reminder card (P8-6)
+  reminderCard: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: Colors.primaryLight || '#FFF5EB',
+    borderRadius: BorderRadius.lg,
+    marginHorizontal: 0,
+    marginBottom: Spacing[3],
+    marginTop: -Spacing[2],
+    padding: Spacing[3],
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.primary,
+    gap: Spacing[2],
+  },
+  reminderIconWrap: {
+    width: 32, height: 32, borderRadius: 8,
+    backgroundColor: Colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  reminderEmoji: { fontSize: 16 },
+  reminderBody:  { flex: 1 },
+  reminderProduct: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.size.xs,
+    color: Colors.text,
+    marginBottom: 1,
+  },
+  reminderSub: {
+    fontFamily: Typography.fontFamily.regular,
+    fontSize: Typography.size.xs,
+    color: Colors.textSecondary,
+  },
+  reminderCta: {
+    backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing[3],
+    paddingVertical: Spacing[2],
+  },
+  reminderCtaText: {
+    fontFamily: Typography.fontFamily.semiBold,
+    fontSize: Typography.size.xs,
+    color: '#fff',
+  },
 
   // Order card
   card: {

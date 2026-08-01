@@ -361,8 +361,9 @@ export async function getBasket(req, res, next) {
 export async function getOrders(req, res, next) {
   try {
     const userId = req.user.id;
-    const { page, limit } = req.query;
-    const result = await orderService.getOrders(userId, { page, limit });
+    // P8-6: search (by order# or product name) + status filter
+    const { page, limit, search, status } = req.query;
+    const result = await orderService.getOrders(userId, { page, limit, search, status });
     res.json({ success: true, data: result });
   } catch (err) {
     next(err);

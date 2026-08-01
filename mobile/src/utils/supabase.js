@@ -79,3 +79,46 @@ export function subscribeToNotifications(userId, onNotification) {
 
   return () => supabase.removeChannel(channel);
 }
+
+/**
+ * P8-4A: Subscribe to new sub_orders for a shop.
+ * Fires onNewOrder(subOrderRow) whenever a new sub-order is inserted
+ * for this shop — powers the real-time order queue badge + alert.
+ *
+ * @param {string}   shopId
+ * @param {function} onNewOrder - called with the new sub_order row
+ * @returns {function} unsubscribe
+ */
+export function subscribeToShopOrders(shopId, onNewOrder) {
+  const channel = supabase
+    .channel(`shop-orders-${shopId}`)
+    .on(
+      'postgres_changes',
+      {
+        event:  'INSERT',
+        schema: 'public',
+        table:  'sub_orders',
+        filter: `shop_id=eq.${shopId}`,
+      },
+      (payload) => {
+        if (payload.new) onNewOrder(payload.new);
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event:  'UPDATE',
+        schema: 'public',
+        table:  'sub_orders',
+        filter: `shop_id=eq.${shopId}`,
+      },
+      (payload) => {
+        // Also fire on status updates so queue refreshes automatically
+        if (payload.new) onNewOrder(payload.new);
+      }
+    )
+    .subscribe();
+
+  return () => supabase.removeChannel(channel);
+}
+

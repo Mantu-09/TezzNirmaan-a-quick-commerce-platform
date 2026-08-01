@@ -12,13 +12,13 @@ export default {
 
   // ESM is handled by "type":"module" in package.json — no need for extensionsToTreatAsEsm
 
-  // Discover test files in src/tests/
-  // Note: __tests__/ is the Jest default; we use src/tests/ to keep tests
-  // alongside source code in the same monorepo structure.
+  // Discover test files in src/tests/ (both legacy names and P8-5 numbered files)
   testMatch: ['**/src/tests/**/*.test.js'],
 
+  // Run serially: tests share staging DB; parallel runs cause FK conflicts
+  runInBand: true,
+
   // Abort slow tests — DB operations can be slow on first connect.
-  // 30s is conservative; most tests should finish in < 5s.
   testTimeout: 30000,
 
   // Coverage output directory (consumed by codecov-action in CI)
@@ -32,17 +32,15 @@ export default {
     '!src/server.js',
   ],
 
-  // Minimum coverage thresholds.
-  // Phase 1-5 tests cover auth, wallet, cart, orders, settlements, shop-dashboard.
-  // Phase 6 features (B2B, Returns, Rider Earnings, Search) have no unit tests yet —
-  // P7-1 runtime verification + future sessions will add them and ratchet these up.
-  // Current actual coverage: ~8% statements (7 suites, 68 tests).
+  // Coverage thresholds — P8-5 adds 8 new service test files.
+  // Phase 1-7 baseline: ~8% statements.
+  // P8-5 target: ≥30% statements across services.
   coverageThreshold: {
     global: {
-      lines:      7,
-      functions:  7,
-      branches:   5,
-      statements: 7,
+      lines:      25,
+      functions:  20,
+      branches:   10,
+      statements: 25,
     },
   },
 

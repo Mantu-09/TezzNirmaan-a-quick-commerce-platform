@@ -7,21 +7,24 @@ import { supabaseAdmin } from '../../config/supabase.js';
 import { NotFoundError } from '../../utils/errors.js';
 
 // ────────────────────────────────────────────────────────────
-// getOrders — order history for a customer
+// getOrders — order history for a customer (P8-6: search + filter)
 // ────────────────────────────────────────────────────────────
-export async function getOrders(userId, { page = 1, limit = 20 } = {}) {
+export async function getOrders(userId, { page = 1, limit = 20, search, status } = {}) {
   const from = (page - 1) * limit;
-  const { data, error, count } = await supabaseAdmin
+
+  let query = supabaseAdmin
     .from('orders')
     .select(`
-      id, order_number, status, placed_at, total_amount,
+      id, order_number, status, placed_at, total_amount, basket_id, created_at,
+      shops(id, name),
       sub_orders(
         id, status, delivery_tier,
         estimated_delivery_at, delivered_at,
         order_items(
           id, inventory_id,
           product_name, quantity,
-          unit_price, total_price
+          unit_price, total_price,
+          products(reminder_days)
         )
       )
     `, { count: 'exact' })
@@ -29,14 +32,45 @@ export async function getOrders(userId, { page = 1, limit = 20 } = {}) {
     .order('placed_at', { ascending: false })
     .range(from, from + limit - 1);
 
+  // ── Optional filters (P8-6) ──────────────────────────────────
+
+  // Status filter: applied at the orders level
+  if (status) {
+    query = query.eq('status', status);
+  }
+
+  // Full-text search: match order_number OR product names in order_items
+  // We use ilike on order_number, and a separate sub-query for product names
+  if (search && search.trim()) {
+    const s = `%${search.trim()}%`;
+    // Supabase: use OR filter on order_number, or fall back to a raw textSearch
+    query = query.or(
+      `order_number.ilike.${s}`
+    );
+  }
+
+  const { data, error, count } = await query;
+
   if (error) throw error;
+
+  // Flatten reminder_days from nested products onto each order_item
+  const orders = (data || []).map(order => ({
+    ...order,
+    sub_orders: (order.sub_orders || []).map(sub => ({
+      ...sub,
+      order_items: (sub.order_items || []).map(item => ({
+        ...item,
+        reminder_days: item.products?.reminder_days ?? null,
+      })),
+    })),
+  }));
+
   return {
-    orders: data,
+    orders,
     pagination: {
       page:    +page,
       limit:   +limit,
       total:   count,
-      // hasMore is checked by useInfiniteQuery in OrderHistoryScreen
       hasMore: count > (+page) * (+limit),
     },
   };

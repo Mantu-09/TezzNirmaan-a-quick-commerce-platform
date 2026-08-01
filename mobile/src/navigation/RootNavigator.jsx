@@ -22,10 +22,11 @@ import { ActivityIndicator, View } from 'react-native';
 import useAuthStore from '../store/authStore';
 import useCityStore from '../store/cityStore'; // P4-4A
 import { Colors } from '../theme';
-import AuthNavigator from './AuthNavigator';
-import TabNavigator from './TabNavigator';
+import AuthNavigator     from './AuthNavigator';
+import TabNavigator      from './TabNavigator';
+import ShopOwnerNavigator from './ShopOwnerNavigator'; // P8-4
 import ShopOnboardingScreen from '../screens/onboarding/ShopOnboardingScreen';
-import CitySelectScreen from '../screens/city/CitySelectScreen'; // P4-4A
+import CitySelectScreen  from '../screens/city/CitySelectScreen'; // P4-4A
 
 const Stack = createNativeStackNavigator();
 
@@ -87,6 +88,15 @@ function PostAuthCityGate() {
   );
 }
 
+// ── Shop-owner navigator wrapper (named screen for reset) ─────
+function ShopOwnerMainNavigator() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="ShopOwnerMain" component={ShopOwnerNavigator} />
+    </Stack.Navigator>
+  );
+}
+
 // ── Main app navigator (wraps TabNavigator in a named screen so onboarding
 //    can navigate.reset to it via { name: 'Main' })
 function MainNavigator() {
@@ -122,6 +132,12 @@ export default function RootNavigator({ navigationRef }) {
     user?.role === 'shop_owner' &&
     user?.setup_complete === false;
 
+  // P8-4: Authenticated shop owners get the dedicated shop management navigator
+  const isShopOwner = isAuthenticated && (
+    user?.role === 'shop_owner' ||
+    user?.role === 'shop_staff'
+  ) && user?.setup_complete !== false; // don't gate-keep if onboarding incomplete
+
   // P4-4A: authenticated users who haven't selected a city yet
   // (e.g. users who upgraded from a version before P4-4A)
   const needsCitySelection = isAuthenticated && !selectedCity;
@@ -137,6 +153,8 @@ export default function RootNavigator({ navigationRef }) {
         <OnboardingNavigator />
       ) : needsCitySelection ? (
         <PostAuthCityGate />  // P4-4A: prompt city selection for existing users
+      ) : isShopOwner ? (
+        <ShopOwnerMainNavigator />  // P8-4: dedicated shop management UI
       ) : (
         <MainNavigator />
       )}

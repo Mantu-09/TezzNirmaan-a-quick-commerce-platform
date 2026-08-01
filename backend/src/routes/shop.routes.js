@@ -14,6 +14,7 @@ import * as sl from '../controllers/slot.controller.js';    // B6
 import * as bulk from '../controllers/bulk-inventory.controller.js'; // P1-D
 import * as st from '../controllers/settlement.controller.js';        // P4-4B
 import * as ai from '../controllers/ai.controller.js';                  // P5-2
+import * as payout from '../controllers/payout.controller.js';         // P8-2
 import {
   shopOrdersQuerySchema,
   rejectSubOrderSchema,
@@ -87,6 +88,14 @@ router.get   ('/shop/slots/bookings',                  ...shopAccess, sl.getSlot
 // P4-4B: Settlement history (shop owner only)
 router.get('/shop/settlements',            ...ownerOnly, st.getMySettlements);
 router.get('/shop/settlements/:batchId',   ...ownerOnly, st.getSettlementDetail);
+
+// P8-2: Bank account + Razorpay Route transfers (shop owner only)
+// POST /shop/bank-account  — submit/update bank details (triggers Route setup)
+// GET  /shop/bank-account  — view account details + verification status + Route status
+// GET  /shop/route/transfers — own Route transfer history (replaces manual settlement wait)
+router.post('/shop/bank-account',          ...ownerOnly, payout.saveBankAccount);
+router.get ('/shop/bank-account',          ...ownerOnly, payout.getBankAccount);
+router.get ('/shop/route/transfers',       ...ownerOnly, payout.getMyRouteTransfers);
 
 // P5-2: AI Demand Forecast — shop owner only
 // GET /shop/demand-forecast?days=7 — returns restock alerts + demand trend

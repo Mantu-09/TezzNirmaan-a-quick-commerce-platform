@@ -39,6 +39,9 @@ export const QUEUES = {
   EXPIRE_SUBSCRIPTIONS:     'expire-subscriptions',       // P5-3: TezzPass daily expiry
   CHECK_FAILED_JOBS:        'check-failed-jobs',          // P5-4B: DLQ alerting
   LOW_STOCK_ALERT:          'low-stock-alert',            // P5-5A: Inventory alerts
+  ROUTE_TRANSFER:           'route-transfer',             // P8-2: Razorpay Route payout
+  SEND_CAMPAIGN:            'send-campaign',               // P8-3: Campaign fan-out worker
+  CHECK_SCHEDULED_CAMPAIGNS:'check-scheduled-campaigns',   // P8-3: Every-minute scheduler poller
 };
 
 // ── Default retry policy ──────────────────────────────────────
@@ -305,7 +308,76 @@ export async function enqueueLowStockAlert(payload) {
   }
 }
 
-// ── Worker Registration ───────────────────────────────────────
+/**
+ * P8-2: Enqueue a Razorpay Route transfer job after payment capture.
+ * Fire-and-forget — called from payment.captured webhook handler.
+ * Never blocks the webhook response.
+ *
+ * Fallback: if queue is disabled (DATABASE_URL not set), runs the
+ * transfer synchronously as a fire-and-forget promise chain.
+ *
+ * @param {string} orderId
+ * @param {string} razorpayPaymentId
+ */
+export async function enqueueRouteTransfer(orderId, razorpayPaymentId) {
+  const queue = getQueue();
+  if (!queue) {
+    // Sync fallback — run the transfer immediately without pg-boss
+    import('../services/payout.service.js').then(({ transferToShop }) => {
+      transferToShop(orderId, razorpayPaymentId).catch(e =>
+        logger.warn('route-transfer (sync fallback) failed', { orderId, error: e.message })
+      );
+    });
+    return null;
+  }
+  try {
+    return await queue.send(
+      QUEUES.ROUTE_TRANSFER,
+      { orderId, razorpayPaymentId },
+      {
+        ...DEFAULT_JOB_OPTIONS,
+        retryLimit:   3,
+        retryDelay:   60,    // 60s before first retry (give Razorpay time to settle)
+        retryBackoff: true,  // 60s, 120s, 240s
+        expireInHours: 24,
+      },
+    );
+  } catch (err) {
+    logger.error('Failed to enqueue route-transfer', { orderId, razorpayPaymentId, error: err.message });
+    return null;
+  }
+}
+
+/**
+ * P8-3: Enqueue an immediate campaign send.
+ * Called by POST /admin/campaigns/:id/send-now.
+ *
+ * @param {string} campaignId
+ */
+export async function enqueueImmediateCampaign(campaignId) {
+  const queue = getQueue();
+  if (!queue) {
+    // Sync fallback — run directly (dev without DATABASE_URL)
+    import('../services/campaign.service.js').then(({ sendCampaign }) => {
+      sendCampaign(campaignId).catch(e =>
+        logger.warn('campaign: sync fallback send failed', { campaignId, error: e.message })
+      );
+    });
+    return null;
+  }
+  try {
+    return await queue.send(
+      QUEUES.SEND_CAMPAIGN,
+      { campaignId },
+      { ...DEFAULT_JOB_OPTIONS, retryLimit: 1, expireInHours: 2 }, // campaigns are time-sensitive
+    );
+  } catch (err) {
+    logger.error('Failed to enqueue campaign send', { campaignId, error: err.message });
+    return null;
+  }
+}
+
+
 
 async function _registerWorkers() {
   // Lazy-import services to avoid circular dependencies at startup
@@ -667,6 +739,110 @@ async function _registerWorkers() {
       } catch (err) {
         logger.error('low-stock-alert worker failed', { jobId: job.id, shopId, error: err.message });
         throw err; // re-throw → pg-boss retries (max 3)
+      }
+    },
+  );
+
+  // Worker 13: Razorpay Route Transfer (P8-2)
+  // Fired by payment.captured webhook via enqueueRouteTransfer().
+  // Calls transferToShop() which handles commission calculation,
+  // Razorpay API call, DB recording, and founder SMS on failure.
+  // Retries 3× with 60s/120s/240s backoff.
+  // Falls back gracefully if shop has no linked account (returns { method: 'manual' }).
+  await boss.work(
+    QUEUES.ROUTE_TRANSFER,
+    { teamSize: 10, teamConcurrency: 10 }, // high concurrency — one job per order
+    async (job) => {
+      const { orderId, razorpayPaymentId } = job.data;
+      try {
+        const { transferToShop } = await import('../services/payout.service.js');
+        const result = await transferToShop(orderId, razorpayPaymentId);
+
+        if (result.method === 'manual') {
+          logger.info('route-transfer: shop not on Route — manual settlement will apply', {
+            jobId: job.id, orderId,
+          });
+        } else if (result.already_processed) {
+          logger.info('route-transfer: already processed — idempotent skip', {
+            jobId: job.id, orderId,
+          });
+        } else {
+          logger.info('route-transfer: success', {
+            jobId:       job.id,
+            orderId,
+            transferId:  result.transfer_id,
+            netPaise:    result.net_amount_paise,
+          });
+        }
+      } catch (err) {
+        logger.error('route-transfer worker failed', {
+          jobId: job.id, orderId, razorpayPaymentId, error: err.message,
+        });
+        throw err; // re-throw → pg-boss retries up to 3×
+      }
+    },
+  );
+
+  // Worker 14: Campaign Fan-out (P8-3)
+  // Called when an admin hits 'Send Now' or the scheduler poller fires.
+  // sendCampaign() is idempotent — safe to retry.
+  // TeamSize 3 — allow up to 3 concurrent campaigns sending simultaneously.
+  await boss.work(
+    QUEUES.SEND_CAMPAIGN,
+    { teamSize: 3, teamConcurrency: 3 },
+    async (job) => {
+      const { campaignId } = job.data;
+      try {
+        const { sendCampaign } = await import('../services/campaign.service.js');
+        await sendCampaign(campaignId);
+        logger.info('send-campaign worker: complete', { jobId: job.id, campaignId });
+      } catch (err) {
+        logger.error('send-campaign worker: failed', { jobId: job.id, campaignId, error: err.message });
+        throw err; // re-throw → pg-boss retries (max 1 — campaigns should not double-send)
+      }
+    },
+  );
+
+  // Cron 15 + Worker 15: Scheduled Campaign Poller (P8-3)
+  // Every minute: find campaigns whose scheduled_at has passed and enqueue them.
+  // pg-boss ensures this fires on exactly one instance even with multiple servers.
+  await boss.schedule(
+    QUEUES.CHECK_SCHEDULED_CAMPAIGNS,
+    '* * * * *',   // every minute
+    {},
+    { tz: 'UTC' },
+  );
+
+  await boss.work(
+    QUEUES.CHECK_SCHEDULED_CAMPAIGNS,
+    { teamSize: 1, teamConcurrency: 1 }, // serialized — one check at a time
+    async (job) => {
+      try {
+        const { data: due } = await supabaseAdmin
+          .from('push_campaigns')
+          .select('id, title')
+          .eq('status', 'scheduled')
+          .lte('scheduled_at', new Date().toISOString());
+
+        if (!due?.length) return;
+
+        logger.info('campaign-poller: found due campaigns', {
+          jobId: job.id,
+          count: due.length,
+          ids:   due.map(c => c.id),
+        });
+
+        for (const campaign of due) {
+          // Enqueue send job (idempotent — sendCampaign checks status before acting)
+          await boss.send(
+            QUEUES.SEND_CAMPAIGN,
+            { campaignId: campaign.id },
+            { ...DEFAULT_JOB_OPTIONS, retryLimit: 1, expireInHours: 2 },
+          );
+        }
+      } catch (err) {
+        // Non-fatal — next minute tick will retry
+        logger.error('campaign-poller worker: failed', { jobId: job.id, error: err.message });
       }
     },
   );

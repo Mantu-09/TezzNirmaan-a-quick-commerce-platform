@@ -1,14 +1,18 @@
 // ────────────────────────────────────────────────────────────
 // Payment Controller
 // Handles Razorpay order creation, verification, and webhooks
+// P8-2: payment.captured now enqueues a route-transfer job so shop
+// payouts are processed automatically via Razorpay Route.
 // ────────────────────────────────────────────────────────────
 import crypto from 'crypto';
-import { razorpay } from '../config/razorpay.js';
-import { supabaseAdmin } from '../config/supabase.js';
+import { razorpay }           from '../config/razorpay.js';
+import { supabaseAdmin }      from '../config/supabase.js';
 import { PaymentError, NotFoundError } from '../utils/errors.js';
-import * as paymentService from '../services/payment.service.js'; // P1-B
+import * as paymentService    from '../services/payment.service.js'; // P1-B
 import * as notificationService from '../services/notification.service.js'; // P1-B
-import * as returnService from '../services/return.service.js'; // P6-3
+import * as returnService     from '../services/return.service.js'; // P6-3
+import * as payoutService     from '../services/payout.service.js'; // P8-2
+import { enqueueRouteTransfer } from '../lib/jobQueue.js';           // P8-2
 import logger from '../utils/logger.js';
 
 
@@ -123,6 +127,23 @@ export async function handleWebhook(req, res, next) {
           .from('payments')
           .update({ razorpay_payment_id: razorpayPaymentId, status: 'captured', updated_at: new Date().toISOString() })
           .eq('razorpay_order_id', razorpayOrderId);
+
+        // P8-2: Enqueue Razorpay Route transfer — fire-and-forget
+        // Never await this; webhook must respond 200 within Razorpay's 5s timeout.
+        // The worker handles retry on failure (up to 3 attempts via pg-boss).
+        const { data: orderRow } = await supabaseAdmin
+          .from('orders')
+          .select('id')
+          .eq('razorpay_order_id', razorpayOrderId)
+          .maybeSingle();
+
+        if (orderRow?.id) {
+          enqueueRouteTransfer(orderRow.id, razorpayPaymentId).catch(err =>
+            logger.warn('webhook: route-transfer enqueue failed (non-fatal)', {
+              orderId: orderRow.id, razorpayPaymentId, error: err.message,
+            })
+          );
+        }
         break;
       }
       case 'payment.failed': {
@@ -184,6 +205,21 @@ export async function handleWebhook(req, res, next) {
         }
 
         logger.info('webhook: refund.processed', { razorpayRefundId: rfndEntity.id });
+        break;
+      }
+
+      // P8-2: Razorpay Route transfer events ————————————————————
+      // These confirm/fail the automated payout to the shop's bank account.
+      case 'transfer.processed': {
+        payoutService.handleTransferProcessed(payload).catch(err =>
+          logger.warn('webhook: transfer.processed handler failed', { error: err.message })
+        );
+        break;
+      }
+      case 'transfer.failed': {
+        payoutService.handleTransferFailed(payload).catch(err =>
+          logger.warn('webhook: transfer.failed handler failed', { error: err.message })
+        );
         break;
       }
       default:

@@ -1,18 +1,21 @@
 // ────────────────────────────────────────────────────────────
 // Server Entry Point — P6-1: Socket.IO + Redis adapter
 //
-// We switch from app.listen() to createServer(app) so that
-// Socket.IO can share the same HTTP server and port as Express.
-// initWebSocket is now async — it awaits the Redis connection
-// before handing off to server.listen().
+// P8-1: validateEnvironment() (config/environment.js) now runs
+// first — it prints a full feature-availability banner so the
+// first lines of any Render log immediately show staging vs
+// production and which optional services are configured.
 // ────────────────────────────────────────────────────────────
 import 'dotenv/config';
-import { validateEnv }          from './utils/validateEnv.js';
+import { validateEnvironment }  from './config/environment.js'; // P8-1
+import { validateEnv }          from './utils/validateEnv.js';  // kept for compat
 import { initQueue, stopQueue } from './lib/jobQueue.js'; // P1-E
 import { createServer }         from 'http';
 import { initWebSocket }        from './lib/websocket.js'; // P6-1
 
-// Validate ALL required env vars before anything else loads.
+// P8-1: Rich startup banner with per-feature availability matrix.
+// Falls back to original validateEnv for the exit-on-missing logic.
+validateEnvironment();
 validateEnv();
 
 import app from './app.js';

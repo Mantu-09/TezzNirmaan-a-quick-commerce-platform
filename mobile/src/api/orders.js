@@ -58,8 +58,11 @@ export async function getBasket(basketId) {
 
 // ── Orders ───────────────────────────────────────────────────
 
-export async function getOrders(page = 1) {
-  return client.get('/orders', { params: { page, limit: 20 } });
+export async function getOrders(page = 1, { search, status } = {}) {
+  const params = { page, limit: 20 };
+  if (search)  params.search = search;
+  if (status)  params.status = status;
+  return client.get('/orders', { params });
 }
 
 export async function getOrder(orderId) {

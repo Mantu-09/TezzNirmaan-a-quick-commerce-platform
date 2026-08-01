@@ -16,8 +16,9 @@ const NAV_ITEMS = [
   { href: '/dashboard/slots',       icon: '🗓️', label: 'Slots',           roles: ['shop_owner'] },  // B6
   { href: '/dashboard/reviews',     icon: '⭐', label: 'Reviews',         roles: ['shop_owner'] },
   { href: '/dashboard/summary',     icon: '📊', label: "Today's Summary", roles: ['shop_owner'] },
-  { href: '/dashboard/settlements', icon: '💰', label: 'Settlements',     roles: ['shop_owner'] },  // P4-4B
-  { href: '/dashboard/returns',     icon: '🔄', label: 'Returns',         roles: ['shop_owner'] },  // P6-3
+  { href: '/dashboard/settlements',   icon: '💰', label: 'Settlements',     roles: ['shop_owner'] },  // P4-4B
+  { href: '/dashboard/bank-account', icon: '🏦', label: 'Bank & Payouts',  roles: ['shop_owner'] },  // P8-2
+  { href: '/dashboard/returns',      icon: '🔄', label: 'Returns',         roles: ['shop_owner'] },  // P6-3
   { href: '/dashboard/b2b',         icon: '🏢', label: 'B2B Contractors',  roles: ['platform_admin'] }, // P6-6
   { href: '/admin/shops',           icon: '🏪', label: 'Admin: Shops',    roles: ['platform_admin'] },
   { href: '/admin/riders',          icon: '👤', label: 'Admin: Riders',   roles: ['platform_admin'] },

@@ -22,8 +22,10 @@ import {
 import * as cashbackCtrl from '../controllers/cashback.controller.js'; // P4-2B
 import * as st           from '../controllers/settlement.controller.js'; // P4-4B
 
-import * as b2bAdmin  from '../controllers/b2b.controller.js';
-import * as jobsCtrl  from '../controllers/jobs.controller.js'; // P7-7
+import * as b2bAdmin    from '../controllers/b2b.controller.js';
+import * as jobsCtrl   from '../controllers/jobs.controller.js';    // P7-7
+import * as payoutCtrl from '../controllers/payout.controller.js';  // P8-2
+import * as campaignCtrl from '../controllers/campaign.controller.js'; // P8-3
 
 const router   = Router();
 const adminOnly = [authenticate, requireRole('platform_admin')];
@@ -96,6 +98,19 @@ router.patch('/admin/settlements/:batchId/paid',    ...adminOnly, st.markPaid);
 // POST  /admin/settlements/generate           — manual settlement run (dev/backfill/off-cycle)
 router.post ('/admin/settlements/generate',         ...adminOnly, st.triggerSettlement);
 
+// ── Razorpay Route (P8-2) ──────────────────────────────────────────
+// POST  /admin/shops/:shopId/route/setup        — create Razorpay linked account for shop
+router.post ('/admin/shops/:shopId/route/setup',             ...adminOnly, payoutCtrl.setupLinkedAccount);
+// NOTE: static sub-paths must come before /:id to avoid route shadowing
+// GET   /admin/route/transfers/summary          — today's totals + shops on/off Route
+router.get  ('/admin/route/transfers/summary',               ...adminOnly, payoutCtrl.getTransferSummary);
+// GET   /admin/route/transfers/shop/:shopId     — per-shop transfer history (admin view)
+router.get  ('/admin/route/transfers/shop/:shopId',          ...adminOnly, payoutCtrl.listShopTransfersAdmin);
+// GET   /admin/route/transfers                  — all transfers (filterable: ?shopId&status&page)
+router.get  ('/admin/route/transfers',                       ...adminOnly, payoutCtrl.listAllTransfers);
+// POST  /admin/route/transfers/:id/reverse      — reverse a processed transfer
+router.post ('/admin/route/transfers/:id/reverse',           ...adminOnly, payoutCtrl.reverseTransfer);
+
 // ── B2B / Contractor Accounts (P6-6) ─────────────────────────────
 // GET    /admin/b2b/applications?status=pending|verified|rejected
 router.get  ('/admin/b2b/applications',                         ...adminOnly, b2bAdmin.listApplications);
@@ -114,5 +129,24 @@ router.get   ('/admin/jobs/failed',           ...adminOnly, jobsCtrl.getFailedJo
 router.post  ('/admin/jobs/retry-all',        ...adminOnly, jobsCtrl.retryAllJobs);
 router.post  ('/admin/jobs/:jobId/retry',     ...adminOnly, jobsCtrl.retryJob);
 router.delete('/admin/jobs/:jobId',           ...adminOnly, jobsCtrl.discardJob);
+
+// ── Push Campaigns (P8-3) ──────────────────────────────────────────
+// NOTE: static sub-paths (/preview, /:id/schedule, etc.) MUST come before /:id
+// GET    /admin/campaigns            — list (paged, ?status filter)
+// POST   /admin/campaigns            — create draft
+// GET    /admin/campaigns/preview    — audience size preview
+// GET    /admin/campaigns/:id        — detail + stats
+// PATCH  /admin/campaigns/:id        — update draft/scheduled
+// POST   /admin/campaigns/:id/schedule   — set scheduled_at
+// POST   /admin/campaigns/:id/send-now   — enqueue immediate send (202)
+// POST   /admin/campaigns/:id/cancel     — cancel draft/scheduled
+router.get  ('/admin/campaigns',                   ...adminOnly, campaignCtrl.listCampaigns);
+router.post ('/admin/campaigns',                   ...adminOnly, campaignCtrl.createCampaign);
+router.get  ('/admin/campaigns/preview',           ...adminOnly, campaignCtrl.previewAudience);
+router.get  ('/admin/campaigns/:id',               ...adminOnly, campaignCtrl.getCampaign);
+router.patch('/admin/campaigns/:id',               ...adminOnly, campaignCtrl.updateCampaign);
+router.post ('/admin/campaigns/:id/schedule',      ...adminOnly, campaignCtrl.scheduleCampaign);
+router.post ('/admin/campaigns/:id/send-now',      ...adminOnly, campaignCtrl.sendCampaignNow);
+router.post ('/admin/campaigns/:id/cancel',        ...adminOnly, campaignCtrl.cancelCampaign);
 
 export default router;

@@ -42,6 +42,7 @@ export default function AdminLayout({ children }) {
     { href: '/admin/shops',          label: 'Shops',     icon: '🏪' },
     { href: '/admin/riders',         label: 'Riders',    icon: '🏍️' },
     { href: '/admin/promos',         label: 'Promos',    icon: '🏷️' }, // P1-C
+    { href: '/admin/campaigns',      label: 'Campaigns', icon: '📣' }, // P8-3
     { href: '/admin/cities',         label: 'Cities',    icon: '🏙️' }, // P4-4A
     { href: '/admin/shop-interests', label: 'Leads',     icon: '📋' }, // P5-0D Bug 5
     { href: '/admin/jobs',           label: 'Jobs',      icon: '⚙️', badge: failedJobCount }, // P7-7
