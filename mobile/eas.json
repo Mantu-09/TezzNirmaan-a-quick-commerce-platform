@@ -1,7 +1,7 @@
 {
   "cli": {
-    "version": ">= 7.0.0",
-    "appVersionSource": "local"
+    "version": ">= 12.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
@@ -15,38 +15,51 @@
         "simulator": true
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://localhost:4000"
+        "EXPO_PUBLIC_API_URL": "http://localhost:3001",
+        "EXPO_PUBLIC_WS_URL": "ws://localhost:3001"
       }
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://tezznirmaan-backend-staging.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://tezznirmaan-backend-staging.onrender.com",
+        "EXPO_PUBLIC_WS_URL": "wss://tezznirmaan-api-staging.onrender.com",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_test_REPLACE_WITH_STAGING_KEY"
       }
     },
     "production": {
       "distribution": "store",
+      "channel": "production",
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "autoIncrement": true
+      },
+      "ios": {
+        "autoIncrement": "version"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://api.tezznirmaan.in"
+        "EXPO_PUBLIC_API_URL": "https://api.tezznirmaan.in",
+        "EXPO_PUBLIC_WS_URL": "wss://api.tezznirmaan.in",
+        "EXPO_PUBLIC_R2_CDN_URL": "https://images.tezznirmaan.in",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_REPLACE_WITH_LIVE_KEY"
       }
     }
   },
   "submit": {
     "production": {
       "android": {
-        "serviceAccountKeyPath": "../google-play-service-account.json",
-        "track": "internal"
+        "serviceAccountKeyPath": "./google-play-key.json",
+        "track": "internal",
+        "changesNotSentForReview": false
       },
       "ios": {
-        "appleId": "YOUR_APPLE_ID_EMAIL",
-        "ascAppId": "YOUR_APP_STORE_CONNECT_APP_ID",
-        "appleTeamId": "YOUR_APPLE_TEAM_ID"
+        "appleId":     "REPLACE_WITH_YOUR_APPLE_ID_EMAIL",
+        "ascAppId":    "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
       }
     }
   }

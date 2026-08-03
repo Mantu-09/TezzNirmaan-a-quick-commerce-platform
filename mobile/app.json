@@ -9,13 +9,24 @@
     "scheme": "tezznirmaan",
     "platforms": ["ios", "android"],
 
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#E8521A"
+      "backgroundColor": "#1A1A18"
     },
 
     "assetBundlePatterns": ["**/*"],
+
+    "updates": {
+      "url": "https://u.expo.dev/REPLACE_WITH_EAS_PROJECT_ID",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
 
     "android": {
       "package": "in.tezznirmaan.app",
@@ -28,6 +39,8 @@
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE",
         "POST_NOTIFICATIONS"
@@ -41,9 +54,6 @@
               "scheme": "https",
               "host": "tezznirmaan.in",
               "pathPrefix": "/order"
-            },
-            {
-              "scheme": "tezznirmaan"
             }
           ],
           "category": ["BROWSABLE", "DEFAULT"]
@@ -56,10 +66,10 @@
       "buildNumber": "1",
       "supportsTablet": false,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "TezzNirmaan needs your location to find nearby shops and deliver to your address.",
-        "NSLocationAlwaysUsageDescription": "TezzNirmaan uses your location for accurate delivery.",
-        "NSCameraUsageDescription": "Used for profile photo.",
-        "NSPhotoLibraryUsageDescription": "Used to select profile photo."
+        "NSLocationWhenInUseUsageDescription": "TezzNirmaan uses your location to find nearby shops and calculate delivery estimates.",
+        "NSLocationAlwaysUsageDescription": "TezzNirmaan uses your location for accurate delivery tracking.",
+        "NSCameraUsageDescription": "TezzNirmaan uses your camera to take photos for return requests and proof of delivery.",
+        "NSPhotoLibraryUsageDescription": "TezzNirmaan accesses your photos to upload images for return requests."
       }
     },
 
@@ -67,12 +77,12 @@
       "expo-secure-store",
       "expo-font",
       "expo-location",
-      "expo-updates",
+      "expo-image-picker",
       [
         "expo-splash-screen",
         {
           "image": "./assets/splash.png",
-          "backgroundColor": "#E8521A"
+          "backgroundColor": "#1A1A18"
         }
       ],
       [
@@ -80,37 +90,34 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#E8521A",
-          "defaultChannel": "general",
-          "sounds": ["./assets/sounds/order-alert.wav"]
+          "sounds": ["./assets/sounds/order-alert.wav"],
+          "androidMode": "default"
+        }
+      ],
+      [
+        "expo-updates",
+        {
+          "username": "mantu-09"
         }
       ],
       [
         "@sentry/react-native/expo",
         {
           "url": "https://sentry.io/",
-          "note": "Set SENTRY_AUTH_TOKEN in CI to upload source maps"
+          "note": "Set SENTRY_AUTH_TOKEN in EAS secrets to upload source maps"
         }
       ]
     ],
 
-    "updates": {
-      "url": "https://u.expo.dev/YOUR_EAS_PROJECT_ID",
-      "enabled": true,
-      "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 0
-    },
-
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
-
     "extra": {
-      "eas":              { "projectId": "YOUR_EAS_PROJECT_ID" },
-      "apiBaseUrl":       "https://api.tezznirmaan.in/api/v1",
-      "supabaseUrl":      "YOUR_SUPABASE_URL",
-      "supabaseAnonKey":  "YOUR_SUPABASE_ANON_KEY",
-      "sentryDsn":        "YOUR_SENTRY_DSN",
-      "razorpayKeyId":    "YOUR_RAZORPAY_KEY_ID"
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      },
+      "apiBaseUrl":      "https://api.tezznirmaan.in/api/v1",
+      "supabaseUrl":     "REPLACE_WITH_SUPABASE_URL",
+      "supabaseAnonKey": "REPLACE_WITH_SUPABASE_ANON_KEY",
+      "sentryDsn":       "REPLACE_WITH_SENTRY_DSN",
+      "razorpayKeyId":   "REPLACE_WITH_RAZORPAY_LIVE_KEY_ID"
     },
 
     "owner": "mantu-09"

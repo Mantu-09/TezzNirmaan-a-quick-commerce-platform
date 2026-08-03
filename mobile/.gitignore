@@ -39,3 +39,10 @@ Thumbs.db
 # and place them here manually before building.
 google-services.json
 GoogleService-Info.plist
+
+# P9-2: Google Play service account key — NEVER commit
+# Download from Google Play Console → Setup → API access
+# Place at: mobile/google-play-key.json
+google-play-key.json
+google-play-service-account.json
+*-service-account*.json
