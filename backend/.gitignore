@@ -48,3 +48,7 @@ Thumbs.db
 # ── Test coverage ─────────────────────────────────────────────
 coverage/
 .nyc_output/
+
+# ── k6 Load Test Results (P9-1) ───────────────────────────────
+# JSON result files are large and machine-generated — no git value
+load-tests/results/
