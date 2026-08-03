@@ -216,3 +216,269 @@ export async function getOptimizedRoute(req, res, next) {
     next(err);
   }
 }
+
+// ── P9-4: GET /rider/status ─────────────────────────────────────
+// Returns current rider online status for RiderHomeScreen toggle.
+export async function getRiderStatus(req, res, next) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('riders')
+      .select('status, is_online')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (error) throw new AppError(error.message, 404);
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── P9-4: GET /rider/stats/today ────────────────────────────────
+// Returns today's delivery count for RiderHomeScreen stats cards.
+export async function getRiderStatsToday(req, res, next) {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data: rider, error: riderErr } = await supabaseAdmin
+      .from('riders')
+      .select('id')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (riderErr || !rider) throw new AppError('Rider profile not found', 404);
+
+    const { count, error } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select('id', { count: 'exact', head: true })
+      .eq('rider_id', rider.id)
+      .eq('status', 'delivered')
+      .gte('delivered_at', `${today}T00:00:00.000Z`);
+
+    if (error) throw new AppError(error.message, 500);
+
+    res.json({ success: true, data: { deliveriesToday: count || 0 } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── P9-4: GET /rider/deliveries/active ──────────────────────────
+// Returns the single active (assigned/picked_up) delivery assignment
+// for RiderHomeScreen. Returns null if no active assignment.
+export async function getActiveDelivery(req, res, next) {
+  try {
+    const { data: rider, error: riderErr } = await supabaseAdmin
+      .from('riders')
+      .select('id')
+      .eq('user_id', req.user.id)
+      .single();
+
+    if (riderErr || !rider) throw new AppError('Rider profile not found', 404);
+
+    const { data, error } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select(`
+        id, status, assigned_at,
+        sub_orders (
+          id, total_amount, payment_method,
+          orders (
+            order_number,
+            addresses ( street, city, state )
+          ),
+          shops ( name, address )
+        )
+      `)
+      .eq('rider_id', rider.id)
+      .in('status', ['assigned', 'picked_up'])
+      .order('assigned_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw new AppError(error.message, 500);
+
+    res.json({ success: true, data: data || null });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── P9-4: POST /rider/payout-request ──────────────────────────────────────
+// Creates a payout_requests row and notifies platform_admin.
+// Rider gets a 24-hour SLA message back immediately.
+export async function requestPayout(req, res, next) {
+  try {
+    const riderId = req.user.id;
+
+    // 1. Check pending payout balance from rider_earnings
+    const { data: earningsRows, error: earnErr } = await supabaseAdmin
+      .from('rider_earnings')
+      .select('id, amount_paise')
+      .eq('rider_id', riderId)
+      .eq('payment_status', 'pending');
+
+    if (earnErr) throw earnErr;
+
+    const totalPaise = (earningsRows || []).reduce((s, r) => s + (r.amount_paise || 0), 0);
+
+    if (totalPaise === 0) {
+      return res.status(400).json({ success: false, message: 'No pending earnings to request payout for.' });
+    }
+
+    // 2. Avoid duplicate requests — check for open payout_requests in last 24h
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: existing } = await supabaseAdmin
+      .from('payout_requests')
+      .select('id')
+      .eq('rider_id', riderId)
+      .eq('status', 'pending')
+      .gte('created_at', since)
+      .limit(1);
+
+    if (existing?.length > 0) {
+      return res.json({
+        success: true,
+        message: 'Your payout request is already being processed. Payment within 24 hours.',
+        already_pending: true,
+      });
+    }
+
+    // 3. Insert payout_requests row
+    const { data: prRow, error: prErr } = await supabaseAdmin
+      .from('payout_requests')
+      .insert({ rider_id: riderId, amount_paise: totalPaise, status: 'pending' })
+      .select()
+      .single();
+
+    if (prErr) throw prErr;
+
+    // 4. Notify all platform_admin users (best-effort — non-fatal)
+    try {
+      const { data: admins } = await supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('role', 'platform_admin');
+
+      if (admins?.length) {
+        const { data: riderProfile } = await supabaseAdmin
+          .from('profiles')
+          .select('full_name')
+          .eq('id', riderId)
+          .single();
+
+        await supabaseAdmin.from('notifications').insert(
+          admins.map(a => ({
+            user_id: a.id,
+            type: 'payout_request',
+            title: 'Payout Request',
+            body: `Rider ${riderProfile?.full_name || 'Unknown'} requested a payout of ₹${(totalPaise / 100).toFixed(0)}`,
+            data: { payout_request_id: prRow.id, rider_id: riderId, amount_paise: totalPaise },
+          }))
+        );
+      }
+    } catch (notifyErr) {
+      logger.warn('[requestPayout] Notification failed (non-fatal)', { error: notifyErr.message });
+    }
+
+    res.json({
+      success: true,
+      message: 'Your request is being processed. Payment within 24 hours.',
+      data: { payout_request_id: prRow.id, amount_paise: totalPaise },
+    });
+  } catch (err) {
+    logger.error('POST /rider/payout-request error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── P9-4: POST /rider/deliveries/:assignmentId/issue ──────────────────────
+// Marks delivery_assignments.issue_reported = true and notifies shop owner.
+export async function reportIssue(req, res, next) {
+  try {
+    const riderId      = req.user.id;
+    const { assignmentId } = req.params;
+    const { issue_type, description } = req.body;
+
+    const VALID_TYPES = [
+      'customer_not_home',
+      'wrong_address',
+      'item_damaged',
+      'vehicle_breakdown',
+      'other',
+    ];
+
+    if (!issue_type || !VALID_TYPES.includes(issue_type)) {
+      return res.status(400).json({
+        success: false,
+        message: `issue_type must be one of: ${VALID_TYPES.join(', ')}`,
+      });
+    }
+
+    // 1. Verify assignment belongs to this rider
+    const { data: assignment, error: aErr } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select('id, sub_order_id, rider_id')
+      .eq('id', assignmentId)
+      .single();
+
+    if (aErr || !assignment) {
+      return res.status(404).json({ success: false, message: 'Assignment not found.' });
+    }
+    if (assignment.rider_id !== riderId) {
+      return res.status(403).json({ success: false, message: 'Not your assignment.' });
+    }
+
+    // 2. Mark issue_reported on the assignment
+    const issueText = description?.trim() ? description.trim() : issue_type.replace(/_/g, ' ');
+    const { error: updateErr } = await supabaseAdmin
+      .from('delivery_assignments')
+      .update({
+        issue_reported: true,
+        issue_type,
+        issue_description: issueText,
+        issue_reported_at: new Date().toISOString(),
+      })
+      .eq('id', assignmentId);
+
+    if (updateErr) throw updateErr;
+
+    // 3. Notify shop owner (best-effort)
+    try {
+      const { data: subOrder } = await supabaseAdmin
+        .from('sub_orders')
+        .select('order_id, shops ( owner_id, name )')
+        .eq('id', assignment.sub_order_id)
+        .single();
+
+      const shopOwnerId = subOrder?.shops?.owner_id;
+      const shopName    = subOrder?.shops?.name || 'your shop';
+
+      if (shopOwnerId) {
+        const typeLabel = issue_type.replace(/_/g, ' ');
+        await supabaseAdmin.from('notifications').insert({
+          user_id: shopOwnerId,
+          type: 'delivery_issue',
+          title: 'Delivery Issue Reported',
+          body: `Issue with delivery from ${shopName}: ${typeLabel}. ${issueText !== typeLabel ? issueText : ''}`.trim(),
+          data: {
+            assignment_id: assignmentId,
+            sub_order_id: assignment.sub_order_id,
+            issue_type,
+            description: issueText,
+          },
+        });
+      }
+    } catch (notifyErr) {
+      logger.warn('[reportIssue] Notification failed (non-fatal)', { error: notifyErr.message });
+    }
+
+    res.json({
+      success: true,
+      message: 'Issue reported. The shop has been notified.',
+    });
+  } catch (err) {
+    logger.error('POST /rider/deliveries/:assignmentId/issue error', { error: err.message });
+    next(err);
+  }
+}
+

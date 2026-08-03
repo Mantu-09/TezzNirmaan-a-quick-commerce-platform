@@ -30,6 +30,9 @@ import RequestReturnScreen    from '../screens/returns/RequestReturnScreen';   /
 import ReturnStatusScreen     from '../screens/returns/ReturnStatusScreen';    // P6-3
 import ContractorApplyScreen  from '../screens/b2b/ContractorApplyScreen';    // P6-6
 import ContractorInvoicesScreen from '../screens/b2b/ContractorInvoicesScreen'; // P6-6
+import RiderHomeScreen          from '../screens/rider/RiderHomeScreen';           // P9-4
+import RiderActiveDeliveryScreen from '../screens/rider/RiderActiveDeliveryScreen'; // P9-4
+import RiderIssueScreen         from '../screens/rider/RiderIssueScreen';           // P9-4
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -111,14 +114,30 @@ function EarningsStack() {
   );
 }
 
-// ── Route stack (P3-B — rider only) ───────────────────────────
+// ── Route stack (P3-B + P9-4 ─ rider only) ────────────────────
+// Route: RiderHome → RiderRoute → RiderDelivery → RiderIssue
 function RouteStack() {
   return (
     <Stack.Navigator screenOptions={defaultStackOptions}>
       <Stack.Screen
+        name="RiderHome"
+        component={RiderHomeScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
         name="RiderRoute"
         component={RiderRouteScreen}
         options={{ title: 'Optimized Route' }}
+      />
+      <Stack.Screen
+        name="RiderDelivery"
+        component={RiderActiveDeliveryScreen}
+        options={{ title: 'Active Delivery' }}
+      />
+      <Stack.Screen
+        name="RiderIssue"
+        component={RiderIssueScreen}
+        options={{ title: 'Report Issue', presentation: 'modal' }}
       />
     </Stack.Navigator>
   );

@@ -20,8 +20,10 @@ import {
   Animated, TouchableOpacity, ActivityIndicator, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { Colors, Typography, Spacing } from '../../theme';
 import { getRiderEarnings } from '../../api/earnings';
+import { client }           from '../../api/client'; // P9-4: payout request
 
 // ── Formatters ────────────────────────────────────────────────
 const fmt = {
@@ -143,11 +145,32 @@ function StatusBadge({ status }) {
 
 // ── Main Screen ───────────────────────────────────────────────
 export default function RiderEarningsScreen() {
-  const [data,       setData]       = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error,      setError]      = useState('');
+  const [data,          setData]          = useState(null);
+  const [loading,        setLoading]       = useState(true);
+  const [refreshing,     setRefreshing]    = useState(false);
+  const [error,          setError]         = useState('');
   const [showAllHistory, setShowAllHistory] = useState(false);
+  const [payoutLoading,  setPayoutLoading]  = useState(false); // P9-4
+
+  // P9-4: Request payout handler
+  const handleRequestPayout = async () => {
+    setPayoutLoading(true);
+    try {
+      const { data: res } = await client.post('/rider/payout-request');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Payout Requested ✓',
+        res?.message || 'Your request is being processed. Payment within 24 hours.',
+        [{ text: 'OK' }]
+      );
+    } catch (err) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      const msg = err?.response?.data?.message || err.message || 'Failed to request payout.';
+      Alert.alert('Error', msg);
+    } finally {
+      setPayoutLoading(false);
+    }
+  };
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -244,12 +267,26 @@ export default function RiderEarningsScreen() {
         <View style={styles.pendingBanner}>
           <View style={styles.pendingLeft}>
             <Ionicons name="time-outline" size={20} color={Colors.warning} />
-            <View style={{ marginLeft: 10 }}>
+            <View style={{ marginLeft: 10, flex: 1 }}>
               <Text style={styles.pendingLabel}>Pending Payout</Text>
               <Text style={styles.pendingHint}>Paid every week · Fri–Sun</Text>
             </View>
           </View>
-          <Text style={styles.pendingAmount}>{fmt.paise(d.pending?.totalPaise)}</Text>
+          <View style={styles.pendingRight}>
+            <Text style={styles.pendingAmount}>{fmt.paise(d.pending?.totalPaise)}</Text>
+            {/* P9-4: Request Payout button */}
+            <TouchableOpacity
+              style={styles.payoutBtn}
+              onPress={handleRequestPayout}
+              disabled={payoutLoading}
+              activeOpacity={0.8}
+            >
+              {payoutLoading
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={styles.payoutBtnText}>Request Payout</Text>
+              }
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -436,17 +473,17 @@ const styles = StyleSheet.create({
 
   // Pending banner
   pendingBanner: {
-    flexDirection:    'row',
-    justifyContent:   'space-between',
-    alignItems:       'center',
+    flexDirection:    'column',
     backgroundColor:  Colors.warningLight,
     borderRadius:     12,
     padding:          Spacing.md,
     marginBottom:     Spacing.md,
     borderLeftWidth:  3,
     borderLeftColor:  Colors.warning,
+    gap: 10,
   },
-  pendingLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  pendingLeft:   { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  pendingRight:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pendingLabel: {
     fontFamily: Typography.fontFamily.semiBold,
     fontSize:   Typography.size.sm,
@@ -462,6 +499,20 @@ const styles = StyleSheet.create({
     fontFamily: Typography.fontFamily.bold,
     fontSize:   Typography.size.xl,
     color:      Colors.warning,
+  },
+  // P9-4: Request Payout button
+  payoutBtn: {
+    backgroundColor:  Colors.primary,
+    borderRadius:     8,
+    paddingVertical:  8,
+    paddingHorizontal: 14,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  payoutBtnText: {
+    fontFamily: Typography.fontFamily.bold,
+    fontSize:   Typography.size.xs,
+    color:      '#fff',
   },
 
   // Card

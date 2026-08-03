@@ -180,4 +180,275 @@ router.post(
   }
 );
 
+// ── P9-5: GET /public/shops/:slug ──────────────────────────────
+// Returns shop metadata for the Next.js web storefront.
+// Used for SSG (generateStaticParams) and ISR (revalidate: 60).
+//
+// No auth required. Returns only published shops (status = 'active').
+// Response includes: name, slug, city, logo, description, categories, rating.
+//
+// Query params: none
+// Cache strategy: Safe to cache at CDN for 60 seconds (add Cache-Control header).
+router.get('/public/shops/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+
+    if (!slug || slug.length < 2 || slug.length > 100) {
+      return res.status(400).json({ success: false, message: 'Invalid shop slug' });
+    }
+
+    const { data: shop, error } = await supabaseAdmin
+      .from('shops')
+      .select(`
+        id, name, slug, city, address,
+        logo_url, description, status,
+        rating, total_reviews,
+        opening_time, closing_time,
+        shop_categories ( category_name, sort_order )
+      `)
+      .eq('slug', slug)
+      .eq('status', 'active')
+      .single();
+
+    if (error || !shop) {
+      return res.status(404).json({ success: false, message: 'Shop not found or inactive' });
+    }
+
+    // Set cache-friendly headers — safe because this data changes infrequently
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+
+    return res.json({
+      success: true,
+      data: {
+        id:           shop.id,
+        name:         shop.name,
+        slug:         shop.slug,
+        city:         shop.city,
+        address:      shop.address,
+        logo_url:     shop.logo_url,
+        description:  shop.description,
+        rating:       shop.rating,
+        total_reviews: shop.total_reviews,
+        opening_time:  shop.opening_time,
+        closing_time:  shop.closing_time,
+        categories:   (shop.shop_categories || [])
+          .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+          .map(c => c.category_name),
+      },
+    });
+  } catch (err) {
+    logger.error('GET /public/shops/:slug error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// ── P9-5: GET /public/shops/:slug/products ──────────────────────
+// Returns paginated product list for a shop.
+// Used by SSG (shop page) and ISR (product listing updates).
+//
+// No auth required. Returns only active products.
+//
+// Query params:
+//   category  — filter by category name (optional)
+//   page      — 1-indexed page number (default: 1)
+//   limit     — items per page (default: 24, max: 48)
+//
+// Cache strategy: Safe to cache at CDN for 60 seconds.
+router.get('/public/shops/:slug/products', async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const category = req.query.category || null;
+    const page     = Math.max(1, parseInt(req.query.page, 10)  || 1);
+    const limit    = Math.min(48, Math.max(1, parseInt(req.query.limit, 10) || 24));
+    const offset   = (page - 1) * limit;
+
+    if (!slug || slug.length < 2 || slug.length > 100) {
+      return res.status(400).json({ success: false, message: 'Invalid shop slug' });
+    }
+
+    // First resolve slug → shop_id
+    const { data: shop, error: shopErr } = await supabaseAdmin
+      .from('shops')
+      .select('id, name, slug')
+      .eq('slug', slug)
+      .eq('status', 'active')
+      .single();
+
+    if (shopErr || !shop) {
+      return res.status(404).json({ success: false, message: 'Shop not found or inactive' });
+    }
+
+    // Query products (via inventory, which links products to shops)
+    let query = supabaseAdmin
+      .from('inventory')
+      .select(`
+        id, price, discounted_price, stock_count, unit,
+        products (
+          id, name, description, category, image_url,
+          brand, specifications
+        )
+      `, { count: 'exact' })
+      .eq('shop_id', shop.id)
+      .eq('is_active', true)
+      .gt('stock_count', 0)      // Only in-stock products on the web listing
+      .order('products(name)', { ascending: true })
+      .range(offset, offset + limit - 1);
+
+    if (category) {
+      query = query.eq('products.category', category);
+    }
+
+    const { data: inventory, count, error: invErr } = await query;
+
+    if (invErr) throw invErr;
+
+    const products = (inventory || []).map(item => ({
+      inventory_id:    item.id,
+      product_id:      item.products?.id,
+      name:            item.products?.name,
+      description:     item.products?.description,
+      category:        item.products?.category,
+      image_url:       item.products?.image_url,
+      brand:           item.products?.brand,
+      price_paise:     item.price,
+      discounted_paise: item.discounted_price,
+      unit:            item.unit,
+      in_stock:        item.stock_count > 0,
+    }));
+
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+
+    return res.json({
+      success: true,
+      data: {
+        shop: { id: shop.id, name: shop.name, slug: shop.slug },
+        products,
+        pagination: {
+          page,
+          limit,
+          total:        count || 0,
+          total_pages:  Math.ceil((count || 0) / limit),
+          has_next:     offset + limit < (count || 0),
+          has_prev:     page > 1,
+        },
+      },
+    });
+  } catch (err) {
+    logger.error('GET /public/shops/:slug/products error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// ── P9-5: GET /public/orders/track ─────────────────────────────
+// Public order tracking by order_number (the short alphanumeric code
+// shown on the customer's order confirmation screen).
+//
+// No auth required — the order_number is the publicly-shareable ref.
+// Returns only safe, non-PII fields.
+//
+// Rate limited to 20 req/min per IP to prevent enumeration attacks.
+//
+// Query params:
+//   order_number — required, e.g. "TN-2024-ABCD"
+const trackingLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max:      20,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  keyGenerator:    (req) => req.ip,
+  message: {
+    success: false,
+    error: { code: 'RATE_LIMIT', message: 'Too many tracking requests. Please try again shortly.' },
+  },
+  skip: (req) => process.env.NODE_ENV === 'test',
+});
+
+router.get('/public/orders/track', trackingLimiter, async (req, res) => {
+  try {
+    const { order_number } = req.query;
+
+    if (!order_number || order_number.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'order_number is required',
+      });
+    }
+
+    const { data: order, error } = await supabaseAdmin
+      .from('orders')
+      .select(`
+        id, order_number, status, created_at, updated_at,
+        shops ( name, city ),
+        sub_orders (
+          id, status, total_amount, payment_method,
+          delivery_assignments (
+            status, assigned_at, picked_up_at, delivered_at
+          )
+        )
+      `)
+      .eq('order_number', order_number.trim().toUpperCase())
+      .single();
+
+    if (error || !order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found. Please check your order number.',
+      });
+    }
+
+    // Shop info lives at order level (orders.shop_id → shops)
+    const shopName = order.shops?.name || 'Shop';
+    const shopCity = order.shops?.city || 'Patna';
+
+    // ── Map to safe public response ──────────────────────────
+    const subOrders = (order.sub_orders || []).map(sub => {
+      const assignment = sub.delivery_assignments?.[0] || null;
+
+      // Derive current status from delivery assignment if available
+      let deliveryStatus = sub.status;
+      if (assignment?.delivered_at)      deliveryStatus = 'delivered';
+      else if (assignment?.picked_up_at) deliveryStatus = 'on_the_way';
+      else if (assignment?.assigned_at)  deliveryStatus = 'rider_assigned';
+
+      return {
+        sub_order_id:   sub.id,
+        shop_name:      shopName,
+        shop_city:      shopCity,
+        status:         deliveryStatus,
+        total_amount:   sub.total_amount,
+        payment_method: sub.payment_method,
+        delivery: assignment ? {
+          status:       assignment.status,
+          rider_city:   shopCity,     // city-level only — no GPS coords
+          assigned_at:  assignment.assigned_at,
+          picked_up_at: assignment.picked_up_at,
+          delivered_at: assignment.delivered_at,
+        } : null,
+      };
+    });
+
+    // Overall order status: worst (furthest from delivered) sub-order
+    const statusRank = { pending: 0, confirmed: 1, rider_assigned: 2, on_the_way: 3, delivered: 4, cancelled: -1 };
+    const overallStatus = subOrders.reduce((worst, sub) => {
+      const r = statusRank[sub.status] ?? 0;
+      return r < (statusRank[worst] ?? 0) ? sub.status : worst;
+    }, subOrders[0]?.status || order.status);
+
+    return res.json({
+      success: true,
+      data: {
+        order_number: order.order_number,
+        status:       overallStatus,
+        placed_at:    order.created_at,
+        updated_at:   order.updated_at,
+        sub_orders:   subOrders,
+      },
+    });
+  } catch (err) {
+    logger.error('GET /public/orders/track error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
 export default router;
+
