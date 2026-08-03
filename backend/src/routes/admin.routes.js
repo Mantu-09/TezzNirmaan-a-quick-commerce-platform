@@ -54,6 +54,7 @@ router.post ('/admin/riders/:riderId/assign',  ...adminOnly, c.assignRiderToShop
 // ── Analytics ───────────────────────────────────────────────
 router.get('/admin/analytics/overview',  ...adminOnly, c.getAnalyticsOverview);
 router.get('/admin/analytics/platform',  ...adminOnly, getPlatformAnalyticsHandler); // P2-A
+router.get('/admin/analytics/live',      ...adminOnly, c.getLiveAnalytics);           // P9-3
 
 // ── Promo Codes (P1-C) ────────────────────────────────────────
 router.get  ('/admin/promos',                    ...adminOnly, promoCtrl.listPromos);

@@ -352,3 +352,10 @@ export const campaignsApi = {
   cancel:   (id)                 => api.post(`/admin/campaigns/${id}/cancel`),
 };
 
+// ── Live Analytics — P9-3 ──────────────────────────────────────
+// GET /admin/analytics/live — founder real-time dashboard
+// Always bypasses browser cache (the endpoint sets no-store too).
+export const liveAnalyticsApi = {
+  getLive: () => api.get('/admin/analytics/live'),
+};
+

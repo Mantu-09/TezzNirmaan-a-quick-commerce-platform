@@ -7,6 +7,7 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { AppError, NotFoundError } from '../utils/errors.js';
 import * as smsService from '../services/sms.service.js';
 import { getPlatformAnalytics } from '../services/platform-analytics.service.js'; // P2-A
+import { getLiveStats }         from '../services/realtime-analytics.service.js';  // P9-3
 import logger from '../utils/logger.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -594,4 +595,51 @@ export async function updateShopInterestStatus(req, res, next) {
     if (error) throw error;
     res.json({ success: true, data });
   } catch (err) { next(err); }
+}
+
+// ── P9-3: GET /admin/analytics/live ───────────────────────────────────
+// Real-time stats for the founder live dashboard.
+// Always fresh — no caching, no SSE. The dashboard polls every 30s.
+// Converts paise → rupees at the API boundary.
+export async function getLiveAnalytics(req, res, next) {
+  try {
+    // Prevent any CDN / browser caching — these numbers must always be live
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+
+    const raw = await getLiveStats();
+
+    // Convert paise → rupees for display
+    const data = {
+      today: {
+        orders:            raw.today.orders,
+        gmv_rupees:        +(raw.today.gmv_paise  / 100).toFixed(2),
+        active_deliveries: raw.today.active_deliveries,
+      },
+      cities: (raw.cities || []).map(c => ({
+        city_name:   c.city_name,
+        order_count: c.order_count,
+        gmv_rupees:  +(c.gmv_paise / 100).toFixed(2),
+      })),
+      recent_orders: (raw.recent_orders || []).map(o => ({
+        order_number:      o.order_number,
+        total_rupees:      +(o.total_amount_paise / 100).toFixed(2),
+        status:            o.status,
+        payment_status:    o.payment_status,
+        shop_name:         o.shop_name,
+        created_at:        o.created_at,
+      })),
+      hourly_chart: (raw.hourly_chart || []).map(h => ({
+        hour:        h.hour,
+        order_count: h.order_count,
+        gmv_rupees:  +(h.gmv_paise / 100).toFixed(2),
+      })),
+      timestamp: raw.timestamp,
+    };
+
+    res.json({ success: true, data });
+  } catch (err) {
+    logger.error('GET /admin/analytics/live error', { error: err.message });
+    next(err);
+  }
 }

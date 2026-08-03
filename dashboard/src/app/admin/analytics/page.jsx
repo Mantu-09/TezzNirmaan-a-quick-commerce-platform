@@ -1,7 +1,14 @@
 'use client';
 // ────────────────────────────────────────────────────────────
-// Admin Analytics — P2-A
+// Admin Analytics — P2-A + P9-3
 // Platform-level GMV dashboard for the platform admin.
+//
+// P9-3 additions:
+//   • LiveBadge — pulsing indicator + last-refresh timestamp
+//   • OrderTicker — real-time SSE feed of incoming orders
+//   • LaunchDayPanel — mission-control card for Day 1
+//   • CityBreakdown — Patna GMV + order count table
+//   • Auto-refresh every 30s via setInterval
 //
 // Sections:
 //   1. KPI row: GMV, Orders, Active Shops, Active Riders
@@ -11,7 +18,7 @@
 //   5. Patna delivery heatmap (SVG zones, no maps library)
 //   6. Platform health: peak day/hour, tier split, rider avg
 // ────────────────────────────────────────────────────────────
-import { useState, useEffect, useCallback, Suspense, lazy } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { analyticsApi } from '../../../lib/api';
 import {
   fetchCashbackRules, createCashbackRule, updateCashbackRule, deleteCashbackRule,
@@ -44,6 +51,272 @@ function Sk({ h = 16, w = '100%', mb = 0 }) {
       background: 'var(--surface-2)',
       animation: 'pulse 1.4s ease infinite',
     }} />
+  );
+}
+
+// ── P9-3: LiveBadge ───────────────────────────────────────────
+// Shows a pulsing green dot + last-refresh time next to the page title.
+function LiveBadge({ lastRefreshed }) {
+  const [ago, setAgo] = useState('just now');
+  useEffect(() => {
+    if (!lastRefreshed) return;
+    const update = () => {
+      const secs = Math.round((Date.now() - lastRefreshed) / 1000);
+      if (secs < 60) setAgo(`${secs}s ago`);
+      else setAgo(`${Math.round(secs / 60)}m ago`);
+    };
+    update();
+    const t = setInterval(update, 5000);
+    return () => clearInterval(t);
+  }, [lastRefreshed]);
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
+      <span style={{
+        display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+        background: '#22c55e',
+        boxShadow: '0 0 0 0 rgba(34,197,94,0.4)',
+        animation: 'livePulse 2s infinite',
+      }} />
+      <style>{`@keyframes livePulse {
+        0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+        70%  { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
+        100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+      }`}</style>
+      Live · refreshed {ago}
+    </span>
+  );
+}
+
+// ── P9-3: OrderTicker ─────────────────────────────────────────
+// Scrolling feed of the last 10 orders from the SSE stream.
+// Connects to GET /internal/analytics/stream via EventSource.
+function OrderTicker({ internalKey, apiBaseUrl }) {
+  const [orders, setOrders] = useState([]);
+  const [connected, setConnected] = useState(false);
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    if (!internalKey || !apiBaseUrl) return;
+
+    // EventSource doesn't support headers natively — pass key as query param
+    // The backend strips it after auth check
+    const url = `${apiBaseUrl}/internal/analytics/stream?key=${encodeURIComponent(internalKey)}`;
+
+    // Note: we use a server-side proxy in Next.js (src/app/api/analytics-stream/route.js)
+    // to forward the internal key header securely. This URL is the proxy.
+    const es = new EventSource(`/api/analytics-stream`);
+
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
+
+    es.addEventListener('new_order', (e) => {
+      try {
+        const order = JSON.parse(e.data);
+        setOrders(prev => {
+          const next = [order, ...prev].slice(0, 10);
+          return next;
+        });
+        // Scroll to top
+        if (listRef.current) listRef.current.scrollTop = 0;
+      } catch (_) {}
+    });
+
+    return () => es.close();
+  }, [internalKey, apiBaseUrl]);
+
+  const fmtTime = (ts) => new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  const fmtPaise = (p) => `₹${((p || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 'var(--r-lg)', padding: 'var(--s5)',
+      boxShadow: 'var(--shadow-sm)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>🔴 Live Orders</div>
+        <span style={{
+          fontSize: 11, padding: '2px 8px', borderRadius: 20,
+          background: connected ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+          color: connected ? '#16a34a' : '#dc2626',
+          fontWeight: 600,
+        }}>
+          {connected ? '● Connected' : '○ Connecting...'}
+        </span>
+      </div>
+
+      {orders.length === 0 ? (
+        <div style={{
+          textAlign: 'center', padding: '24px 0',
+          color: 'var(--text-3)', fontSize: 13,
+        }}>
+          ⏳ Waiting for first order...
+        </div>
+      ) : (
+        <div ref={listRef} style={{ maxHeight: 200, overflowY: 'auto' }}>
+          {orders.map((o, i) => (
+            <div key={o.sub_order_id || i} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '8px 0', borderBottom: '1px solid var(--border)',
+              fontSize: 13, animation: i === 0 ? 'slideIn 0.3s ease' : 'none',
+            }}>
+              <style>{`@keyframes slideIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }`}</style>
+              <div>
+                <span style={{ color: 'var(--text-3)', marginRight: 8 }}>{fmtTime(o.timestamp)}</span>
+                <span style={{ fontWeight: 600, color: 'var(--primary)' }}>
+                  #{o.order_number}
+                </span>
+                <span style={{ color: 'var(--text-2)', marginLeft: 6 }}>
+                  {o.shop_name} · {o.city}
+                </span>
+              </div>
+              <div style={{ fontWeight: 700, color: 'var(--text)' }}>{fmtPaise(o.total_paise)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── P9-3: LaunchDayPanel ──────────────────────────────────────
+// Collapsible mission-control card. Shown when order count is 0 (pre-launch)
+// or on the day of the first order.
+function LaunchDayPanel({ orderCount, firstOrderAt }) {
+  const [open, setOpen] = useState(true);
+  const [confetti, setConfetti] = useState(false);
+
+  const isFirstOrder = orderCount === 1 && !firstOrderAt;
+  const isPreLaunch  = orderCount === 0;
+
+  useEffect(() => {
+    if (isFirstOrder) {
+      setConfetti(true);
+      setTimeout(() => setConfetti(false), 4000);
+    }
+  }, [isFirstOrder]);
+
+  if (!isPreLaunch && !isFirstOrder && orderCount > 5) return null; // Hide after early ramp-up
+
+  return (
+    <div style={{
+      background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
+      border: '1px solid rgba(232,82,26,0.3)',
+      borderRadius: 'var(--r-lg)', padding: 'var(--s5)',
+      position: 'relative', overflow: 'hidden',
+    }}>
+      {/* Confetti animation */}
+      {confetti && (
+        <style>{`
+          @keyframes confettiFall {
+            0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(100px) rotate(720deg); opacity: 0; }
+          }
+          .confetti-piece {
+            position: absolute; top: 0;
+            width: 8px; height: 8px; border-radius: 2px;
+            animation: confettiFall 2s ease-in forwards;
+          }
+        `}</style>
+      )}
+      {confetti && [...Array(20)].map((_, i) => (
+        <div key={i} className="confetti-piece" style={{
+          left: `${Math.random() * 100}%`,
+          background: ['#E8521A','#FFD700','#22c55e','#3b82f6','#a855f7'][i % 5],
+          animationDelay: `${Math.random() * 0.5}s`,
+          animationDuration: `${1.5 + Math.random()}s`,
+        }} />
+      ))}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: '#fff' }}>
+          {isFirstOrder ? '🎉 First Order Received!' : '🚀 Launch Day'}
+        </div>
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 18 }}
+        >
+          {open ? '▲' : '▼'}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 16 }}>
+          {isPreLaunch ? (
+            <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, lineHeight: 1.6 }}>
+              <div>✅ P9-0 infrastructure verified</div>
+              <div>✅ Load tests passed</div>
+              <div>✅ Android app live on Play Store</div>
+              <div style={{ marginTop: 8, color: '#E8521A', fontWeight: 600 }}>
+                ⏳ Waiting for first customer order...
+              </div>
+            </div>
+          ) : (
+            <div style={{ color: 'rgba(255,255,255,0.9)', fontSize: 14, lineHeight: 1.8 }}>
+              <div style={{ fontSize: 28, marginBottom: 4 }}>🎯</div>
+              <div>TezzNirmaan is <strong>live</strong>. The first customer has placed an order.</div>
+              <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.6)', fontSize: 12 }}>
+                Total orders today: <strong style={{ color: '#E8521A' }}>{orderCount}</strong>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── P9-3: CityBreakdown ───────────────────────────────────────
+// City-level GMV and order count table. Row-based for easy multi-city expansion.
+function CityBreakdown({ citiesData }) {
+  if (!citiesData) return null;
+
+  // citiesData shape: { patna: { orders, gmv_paise }, ... }
+  const rows = Object.entries(citiesData).map(([city, data]) => ({
+    city:       city.charAt(0).toUpperCase() + city.slice(1),
+    orders:     data.orders     || 0,
+    gmv_paise:  data.gmv_paise  || 0,
+    aov_paise:  data.orders > 0 ? Math.round(data.gmv_paise / data.orders) : 0,
+  })).sort((a, b) => b.gmv_paise - a.gmv_paise);
+
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 'var(--r-lg)', padding: 'var(--s5)',
+      boxShadow: 'var(--shadow-sm)',
+    }}>
+      <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)', marginBottom: 16 }}>🗺️ City Breakdown</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ color: 'var(--text-3)', textAlign: 'left' }}>
+            <th style={{ padding: '4px 0 8px', fontWeight: 600 }}>City</th>
+            <th style={{ padding: '4px 0 8px', fontWeight: 600, textAlign: 'right' }}>Orders</th>
+            <th style={{ padding: '4px 0 8px', fontWeight: 600, textAlign: 'right' }}>GMV</th>
+            <th style={{ padding: '4px 0 8px', fontWeight: 600, textAlign: 'right' }}>AOV</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.city} style={{ borderTop: '1px solid var(--border)' }}>
+              <td style={{ padding: '10px 0', fontWeight: 600, color: 'var(--text)' }}>{r.city}</td>
+              <td style={{ padding: '10px 0', textAlign: 'right', color: 'var(--text-2)' }}>{r.orders.toLocaleString('en-IN')}</td>
+              <td style={{ padding: '10px 0', textAlign: 'right', fontWeight: 700, color: 'var(--primary)' }}>
+                ₹{(r.gmv_paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </td>
+              <td style={{ padding: '10px 0', textAlign: 'right', color: 'var(--text-2)' }}>
+                ₹{(r.aov_paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-3)', fontSize: 13 }}>
+          No city data yet
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -439,10 +712,11 @@ function HealthMetric({ label, value, sub, color = 'var(--primary)' }) {
 
 // ── Main Page ─────────────────────────────────────────────────
 export default function AdminAnalyticsPage() {
-  const [period,  setPeriod]  = useState('30d');
-  const [data,    setData]    = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
+  const [period,       setPeriod]       = useState('30d');
+  const [data,         setData]         = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState('');
+  const [lastRefreshed, setLastRefreshed] = useState(null); // P9-3: auto-refresh
 
   const load = useCallback(async (p) => {
     setLoading(true);
@@ -450,6 +724,7 @@ export default function AdminAnalyticsPage() {
     try {
       const res = await analyticsApi.getPlatformAnalytics(p);
       setData(res.data || res);
+      setLastRefreshed(Date.now()); // P9-3: track refresh time
     } catch (e) {
       setError(e.message || 'Failed to load platform analytics.');
     } finally {
@@ -458,6 +733,12 @@ export default function AdminAnalyticsPage() {
   }, []);
 
   useEffect(() => { load(period); }, [period, load]);
+
+  // P9-3: Auto-refresh every 30 seconds
+  useEffect(() => {
+    const t = setInterval(() => load(period), 30_000);
+    return () => clearInterval(t);
+  }, [period, load]);
 
   const PERIODS = [
     { key: 'today', label: 'Today' },
@@ -475,8 +756,9 @@ export default function AdminAnalyticsPage() {
           <h1 style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)', margin: 0 }}>
             Platform Analytics
           </h1>
-          <p style={{ fontSize: 13, color: 'var(--text-2)', margin: '4px 0 0' }}>
+          <p style={{ fontSize: 13, color: 'var(--text-2)', margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: 8 }}>
             Cross-shop GMV, orders, and operational health
+            {lastRefreshed && <LiveBadge lastRefreshed={lastRefreshed} />}
           </p>
         </div>
         {/* Period selector */}
@@ -499,6 +781,17 @@ export default function AdminAnalyticsPage() {
           ⚠️ {error}
         </div>
       )}
+
+      {/* ── P9-3: Launch Day Panel + Order Ticker ── */}
+      <LaunchDayPanel orderCount={d?.orders?.total ?? 0} />
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--s4)', marginBottom: 'var(--s5)' }}>
+        <OrderTicker
+          internalKey={process.env.NEXT_PUBLIC_INTERNAL_KEY}
+          apiBaseUrl={process.env.NEXT_PUBLIC_API_URL}
+        />
+        <CityBreakdown citiesData={d?.cities} />
+      </div>
 
       {/* ── Row 1: KPI Cards ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--s4)', marginBottom: 'var(--s5)' }}>

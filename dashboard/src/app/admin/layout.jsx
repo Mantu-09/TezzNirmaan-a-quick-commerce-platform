@@ -4,14 +4,15 @@ import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import useAuthStore from '../../store/authStore';
-import { supportApi, jobsApi } from '../../lib/api';
+import { supportApi, jobsApi, liveAnalyticsApi } from '../../lib/api';
 
 export default function AdminLayout({ children }) {
   const { role } = useAuthStore();
   const router = useRouter();
   const pathname = usePathname();
-  const [unreadCount,    setUnreadCount]    = useState(0); // P7-4: Freshchat badge
-  const [failedJobCount, setFailedJobCount] = useState(0); // P7-7: DLQ badge
+  const [unreadCount,       setUnreadCount]       = useState(0); // P7-4: Freshchat badge
+  const [failedJobCount,    setFailedJobCount]    = useState(0); // P7-7: DLQ badge
+  const [activeDeliveries,  setActiveDeliveries]  = useState(0); // P9-3: Live dot
 
   // P7-4: Fetch open conversation count from Freshchat REST API
   useEffect(() => {
@@ -27,6 +28,20 @@ export default function AdminLayout({ children }) {
       .catch(() => {});
   }, []);
 
+  // P9-3: Fetch active delivery count for Live dot (refreshes every 60s)
+  useEffect(() => {
+    const load = () =>
+      liveAnalyticsApi.getLive()
+        .then(res => {
+          const d = res?.data?.data || res?.data;
+          setActiveDeliveries(d?.today?.active_deliveries || 0);
+        })
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
   useEffect(() => {
     if (role && role !== 'platform_admin') {
       router.replace('/dashboard');
@@ -38,14 +53,15 @@ export default function AdminLayout({ children }) {
   }
 
   const navLinks = [
-    { href: '/admin/analytics',      label: 'Analytics', icon: '📊' }, // P2-A
-    { href: '/admin/shops',          label: 'Shops',     icon: '🏪' },
-    { href: '/admin/riders',         label: 'Riders',    icon: '🏍️' },
-    { href: '/admin/promos',         label: 'Promos',    icon: '🏷️' }, // P1-C
-    { href: '/admin/campaigns',      label: 'Campaigns', icon: '📣' }, // P8-3
-    { href: '/admin/cities',         label: 'Cities',    icon: '🏙️' }, // P4-4A
-    { href: '/admin/shop-interests', label: 'Leads',     icon: '📋' }, // P5-0D Bug 5
-    { href: '/admin/jobs',           label: 'Jobs',      icon: '⚙️', badge: failedJobCount }, // P7-7
+    { href: '/admin/live',          label: 'Live',      icon: '🔴', liveCount: activeDeliveries }, // P9-3
+    { href: '/admin/analytics',     label: 'Analytics', icon: '📊' }, // P2-A
+    { href: '/admin/shops',         label: 'Shops',     icon: '🏪' },
+    { href: '/admin/riders',        label: 'Riders',    icon: '🏍️' },
+    { href: '/admin/promos',        label: 'Promos',    icon: '🏷️' }, // P1-C
+    { href: '/admin/campaigns',     label: 'Campaigns', icon: '📣' }, // P8-3
+    { href: '/admin/cities',        label: 'Cities',    icon: '🏙️' }, // P4-4A
+    { href: '/admin/shop-interests',label: 'Leads',     icon: '📋' }, // P5-0D Bug 5
+    { href: '/admin/jobs',          label: 'Jobs',      icon: '⚙️', badge: failedJobCount }, // P7-7
   ];
 
   const isActive = (href) => pathname === href || pathname.startsWith(href + '/');
@@ -161,6 +177,19 @@ export default function AdminLayout({ children }) {
                   }}>
                     {link.badge > 99 ? '99+' : link.badge}
                   </span>
+                )}
+                {/* P9-3: Green pulsing dot for active deliveries on Live link */}
+                {link.liveCount > 0 && (
+                  <span style={{
+                    position:        'absolute',
+                    top:             -4,
+                    right:           -4,
+                    width:           8,
+                    height:          8,
+                    borderRadius:    '50%',
+                    backgroundColor: '#22c55e',
+                    animation:       'dlq-pulse 1.5s ease-in-out infinite',
+                  }} />
                 )}
               </Link>
             ))}
