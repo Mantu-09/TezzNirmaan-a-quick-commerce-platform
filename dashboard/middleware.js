@@ -6,6 +6,7 @@ const PUBLIC_PATHS = [
   '/terms',
   '/shop-signup',
   '/about',
+  '/storefront', // P9-5: web storefront — public, has its own OTP auth
 ];
 
 function decodeJwt(token) {

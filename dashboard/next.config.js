@@ -13,6 +13,7 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: '**.supabase.co' },
       { protocol: 'https', hostname: 'via.placeholder.com' },
+      { protocol: 'https', hostname: 'images.tezznirmaan.in' }, // P9-5: storefront product images
     ],
   },
 };

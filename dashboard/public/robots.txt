@@ -1,7 +1,22 @@
 User-agent: *
-Disallow: /
 
-# TezzNirmaan Dashboard — Internal Operations Tool
-# This is not a public website. All pages are gated behind authentication.
-# Blocking all bots prevents accidental indexing of the login page
-# and any other URL that might be publicly accessible (e.g. Render preview URL).
+# TezzNirmaan Web Storefront — P9-5
+# Allow storefront and marketing pages for indexing
+Allow: /storefront/
+Allow: /storefront/category/
+Allow: /storefront/product/
+Allow: /storefront/city/
+Allow: /privacy
+Allow: /terms
+Allow: /shop-signup
+
+# Block internal tools — dashboard, admin panel, rider app, APIs
+Disallow: /dashboard/
+Disallow: /admin/
+Disallow: /rider/
+Disallow: /login
+Disallow: /api/
+Disallow: /storefront/auth
+Disallow: /storefront/cart
+
+Sitemap: https://tezznirmaan.in/sitemap.xml
