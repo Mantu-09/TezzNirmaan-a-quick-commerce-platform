@@ -82,3 +82,7 @@ mobile/ios/
 *.ipa
 *.apk
 *.aab
+
+# Debug / temp files
+backend/test-session-h.txt
+backend/test-*.txt
