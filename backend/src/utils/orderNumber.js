@@ -1,65 +1,48 @@
-import { ORDER_NUMBER_PREFIX, TIER_SUFFIXES } from '../config/constants.js';
-
-// ────────────────────────────────────────────────────────────
-// Order Number Generator
+﻿// ────────────────────────────────────────────────────────────
+// Order Number Generator — V2 (Session H — P3 fix)
 //
-// Format: TN-YYMMDD-NNNN
-// Example: TN-240615-0042
+// Format:  TN-YYMMDD-NNNNNN
+// Example: TN-260906-001042
 //
-// V1: Simple in-memory counter per day. Good enough for the pilot
-// where order volume is low. For production scale, upgrade to a
-// Postgres SEQUENCE or use the database row count for the day.
+// V2: Uses a Postgres SEQUENCE (order_number_seq) via the
+// generate_order_number() DB function. Safe across multiple
+// server instances, process restarts, and concurrent requests.
+//
+// V1 used an in-memory counter that reset on restart and was
+// not safe for multi-instance deployments. See migration 083.
 // ────────────────────────────────────────────────────────────
-
-let lastDate = '';
-let counter = 0;
-
-/**
- * Pad a number to at least `length` digits with leading zeros.
- */
-function zeroPad(num, length = 2) {
-  return String(num).padStart(length, '0');
-}
+import { TIER_SUFFIXES } from '../config/constants.js';
+import { supabaseAdmin } from '../config/supabase.js';
+import logger from './logger.js';
 
 /**
- * Get today's date as YYMMDD string.
- */
-function getDateStamp() {
-  const now = new Date();
-  const yy = zeroPad(now.getFullYear() % 100);
-  const mm = zeroPad(now.getMonth() + 1);
-  const dd = zeroPad(now.getDate());
-  return `${yy}${mm}${dd}`;
-}
-
-/**
- * Generate a unique human-readable order number.
+ * Generate a unique human-readable order number using a Postgres SEQUENCE.
+ * Safe for multi-instance deployments and server restarts.
  *
- * @returns {string} e.g. "TN-260701-0001"
- *
- * NOTE: This is NOT concurrency-safe across multiple server instances.
- * For multi-instance deployments, replace with a Postgres SEQUENCE:
- *   SELECT nextval('order_number_seq')
+ * @returns {Promise<string>} e.g. "TN-260906-001042"
  */
-export function generateOrderNumber() {
-  const dateStamp = getDateStamp();
-
-  if (dateStamp !== lastDate) {
-    lastDate = dateStamp;
-    counter = 0;
+export async function generateOrderNumber() {
+  const { data, error } = await supabaseAdmin.rpc('generate_order_number');
+  if (error) {
+    // If the DB function fails (e.g. migration not yet applied), fall back
+    // to a timestamp+random suffix — still unique enough for the short term.
+    logger.error('generate_order_number RPC failed — using fallback', { error: error.message });
+    const now = new Date();
+    const yy  = String(now.getFullYear() % 100).padStart(2, '0');
+    const mm  = String(now.getMonth() + 1).padStart(2, '0');
+    const dd  = String(now.getDate()).padStart(2, '0');
+    const rnd = Math.random().toString(36).substring(2, 7).toUpperCase();
+    return `TN-${yy}${mm}${dd}-F${rnd}`; // 'F' prefix = fallback, easy to spot
   }
-
-  counter += 1;
-
-  return `${ORDER_NUMBER_PREFIX}-${dateStamp}-${zeroPad(counter, 4)}`;
+  return data;
 }
 
 /**
  * Generate a sub-order number from the parent order number and delivery tier.
  *
- * @param {string} orderNumber  - Parent order number (e.g. "TN-260701-0001")
+ * @param {string} orderNumber  - Parent order number (e.g. "TN-260906-001042")
  * @param {string} deliveryTier - 'quick' or 'scheduled'
- * @returns {string} e.g. "TN-260701-0001-Q" or "TN-260701-0001-S"
+ * @returns {string} e.g. "TN-260906-001042-Q"
  */
 export function generateSubOrderNumber(orderNumber, deliveryTier) {
   const suffix = TIER_SUFFIXES[deliveryTier] || deliveryTier.charAt(0).toUpperCase();

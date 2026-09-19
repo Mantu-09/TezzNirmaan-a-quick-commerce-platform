@@ -7,11 +7,23 @@
 // production and which optional services are configured.
 // ────────────────────────────────────────────────────────────
 import 'dotenv/config';
+
+// P13-4: Sentry error monitoring (before all other imports to catch startup errors)
+if (process.env.SENTRY_DSN) {
+  const Sentry = await import('@sentry/node');
+  Sentry.init({
+    dsn:              process.env.SENTRY_DSN,
+    environment:      process.env.NODE_ENV || 'development',
+    tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.1 : 1.0,
+  });
+}
+
 import { validateEnvironment }  from './config/environment.js'; // P8-1
 import { validateEnv }          from './utils/validateEnv.js';  // kept for compat
 import { initQueue, stopQueue } from './lib/jobQueue.js'; // P1-E
 import { createServer }         from 'http';
 import { initWebSocket }        from './lib/websocket.js'; // P6-1
+
 
 // P8-1: Rich startup banner with per-feature availability matrix.
 // Falls back to original validateEnv for the exit-on-missing logic.
@@ -46,6 +58,12 @@ server.listen(PORT, () => {
   initQueue().then((q) => {
     if (q) console.log('  ✓ Job queue (pg-boss) running');
   }).catch(() => {}); // errors already logged inside initQueue
+
+  // P18-4: Flash sale auto-scheduler (activates/deactivates based on schedule)
+  import('./services/flash-sale.service.js').then(({ startFlashSaleScheduler }) => {
+    startFlashSaleScheduler();
+    console.log('  ✓ Flash sale scheduler running (5-min interval)');
+  }).catch(() => {});
 });
 
 // Graceful shutdown

@@ -55,6 +55,8 @@ router.patch ('/shop/inventory/bulk-update',              ...shopAccess, validat
 // P1-D: CSV bulk upload (uses multer middleware — no JSON body validator)
 router.get   ('/shop/inventory/bulk-template',            ...shopAccess, bulk.downloadTemplate);
 router.post  ('/shop/inventory/bulk-upload',              ...shopAccess, bulk.uploadMiddleware, bulk.bulkUpload);
+// Phase 12: Master Catalog Discovery — shop owners browse products not yet in their inventory
+router.get   ('/shop/catalog',                            ...shopAccess, c.getMasterCatalog);
 router.patch ('/shop/inventory/:inventoryId',             ...shopAccess, validate(updateInventoryItemSchema), c.updateInventoryItem);
 router.delete('/shop/inventory/:inventoryId',             ...ownerOnly,  c.removeFromInventory);
 
@@ -121,6 +123,142 @@ router.patch('/shop/returns/:returnId/reject',     ...ownerOnly,  validate(rejec
 // Client uploads bytes directly to R2 — never passes through Node.js
 import * as img from '../controllers/image.controller.js';
 router.post('/shop/images/upload-url', ...shopAccess, img.getImageUploadUrl);
+
+// ── P17-2: Demand Forecast ────────────────────────────────────
+// GET /shop/demand-forecast?days=7
+router.get('/shop/demand-forecast', ...shopAccess, async (req, res, next) => {
+  try {
+    const days   = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
+    const shopId = req.shopId; // set by shopAccess middleware
+    const { forecastDemand } = await import('../services/demand-forecast.service.js');
+    const forecast = await forecastDemand(shopId, days);
+    res.json({ success: true, data: { forecast, days, generated_at: new Date().toISOString() } });
+  } catch (err) { next(err); }
+});
+
+// ── P19-2: Shop Revenue Trend ─────────────────────────────
+// GET /shop/analytics/revenue-trend?days=7
+router.get('/shop/analytics/revenue-trend', ...shopAccess, async (req, res, next) => {
+  try {
+    const { supabaseAdmin } = await import('../config/supabase.js');
+    const days   = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 30);
+    const shopId = req.shopId;
+    const result = [];
+
+    for (let i = days - 1; i >= 0; i--) {
+      const date    = new Date();
+      date.setDate(date.getDate() - i);
+      const dayStr  = date.toISOString().slice(0, 10);
+      const nextDay = new Date(date); nextDay.setDate(date.getDate() + 1);
+
+      const { data: subOrders } = await supabaseAdmin
+        .from('sub_orders')
+        .select('id, total_paise')
+        .eq('shop_id', shopId)
+        .eq('status', 'delivered')
+        .gte('updated_at', dayStr + 'T00:00:00')
+        .lt('updated_at', nextDay.toISOString().slice(0, 10) + 'T00:00:00');
+
+      const revenue = (subOrders || []).reduce((s, o) => s + (o.total_paise || 0), 0);
+      result.push({ date: dayStr, revenue_paise: revenue, orders: (subOrders || []).length });
+    }
+
+    // Best sellers (top 5 products by units sold in the period)
+    const startDate = new Date(); startDate.setDate(startDate.getDate() - days);
+    const { data: bestItems } = await supabaseAdmin
+      .from('order_items')
+      .select('quantity, inventory:shop_inventory!inner(product:products(name, brand), shop_id)')
+      .eq('inventory.shop_id', shopId)
+      .gte('created_at', startDate.toISOString())
+      .limit(200);
+
+    const productMap = {};
+    (bestItems || []).forEach(item => {
+      const name = [item.inventory?.product?.brand, item.inventory?.product?.name].filter(Boolean).join(' ');
+      productMap[name] = (productMap[name] || 0) + (item.quantity || 1);
+    });
+    const bestSellers = Object.entries(productMap)
+      .sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([name, units]) => ({ name, units }));
+
+    res.json({ success: true, data: { trend: result, best_sellers: bestSellers, days } });
+  } catch (err) { next(err); }
+});
+
+// ── Phase C: Shop Staff Management ───────────────────────────
+// GET  /shop/staff             — list all staff for this shop (owner only)
+// PATCH /shop/staff/:staffId/toggle — activate / deactivate a staff member
+
+router.get('/shop/staff', ...ownerOnly, async (req, res, next) => {
+  try {
+    const { supabaseAdmin } = await import('../config/supabase.js');
+    const shopId = req.shopId; // set by requireShopAccess
+
+    // staff profiles linked to this shop via shop_staff_assignments or shop_id on profiles
+    const { data: staff, error } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, phone, is_active, created_at')
+      .eq('shop_id', shopId)
+      .eq('role', 'shop_staff')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: { staff: staff || [], total: (staff || []).length },
+    });
+  } catch (err) { next(err); }
+});
+
+router.patch('/shop/staff/:staffId/toggle', ...ownerOnly, async (req, res, next) => {
+  try {
+    const { supabaseAdmin } = await import('../config/supabase.js');
+    const { AppError }      = await import('../utils/errors.js');
+    const shopId   = req.shopId;
+    const staffId  = req.params.staffId;
+
+    // Verify staff belongs to this shop
+    const { data: staffMember, error: findErr } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, is_active, role, shop_id')
+      .eq('id', staffId)
+      .eq('shop_id', shopId)
+      .eq('role', 'shop_staff')
+      .maybeSingle();
+
+    if (findErr) throw findErr;
+    if (!staffMember) throw new AppError('Staff member not found in your shop', 404);
+
+    const newStatus = !staffMember.is_active;
+
+    // Update is_active in profiles
+    const { error: updateErr } = await supabaseAdmin
+      .from('profiles')
+      .update({ is_active: newStatus, updated_at: new Date().toISOString() })
+      .eq('id', staffId);
+
+    if (updateErr) throw updateErr;
+
+    // Also disable Supabase Auth user if deactivating
+    if (!newStatus) {
+      await supabaseAdmin.auth.admin.updateUserById(staffId, { ban_duration: '8760h' })
+        .catch(e => { /* non-fatal — profile flag is source of truth */ });
+    } else {
+      await supabaseAdmin.auth.admin.updateUserById(staffId, { ban_duration: 'none' })
+        .catch(e => {});
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id:        staffId,
+        is_active: newStatus,
+        message:   `${staffMember.full_name} has been ${newStatus ? 'activated' : 'deactivated'}`,
+      },
+    });
+  } catch (err) { next(err); }
+});
 
 export default router;
 

@@ -31,9 +31,47 @@ export async function createRazorpayOrder(req, res, next) {
 
     if (error || !order) throw new NotFoundError('Order not found');
 
-    // TODO: Check no existing captured payment for this order
+    // Session N — H2: Guard against duplicate payment creation
+    // If a captured payment already exists for this order (e.g. double-tap),
+    // return the existing razorpay_order_id so client can show payment was done.
+    const { data: existingPayment } = await supabaseAdmin
+      .from('payments')
+      .select('razorpay_order_id, status')
+      .eq('order_id', orderId)
+      .in('status', ['captured', 'pending'])
+      .maybeSingle();
+
+    if (existingPayment?.status === 'captured') {
+      logger.info('createRazorpayOrder: payment already captured, returning existing', { orderId });
+      return res.json({
+        success: true,
+        data: {
+          razorpayOrderId: existingPayment.razorpay_order_id,
+          amount:          order.total_amount,
+          currency:        'INR',
+          keyId:           process.env.RAZORPAY_KEY_ID,
+          alreadyCaptured: true,
+        },
+      });
+    }
+
+    // If a pending Razorpay order already exists for this payment, reuse it
+    // (avoids creating orphaned Razorpay orders on retry)
+    if (existingPayment?.status === 'pending' && existingPayment.razorpay_order_id) {
+      logger.info('createRazorpayOrder: reusing existing pending Razorpay order', { orderId });
+      return res.json({
+        success: true,
+        data: {
+          razorpayOrderId: existingPayment.razorpay_order_id,
+          amount:          order.total_amount,
+          currency:        'INR',
+          keyId:           process.env.RAZORPAY_KEY_ID,
+        },
+      });
+    }
 
     // Create Razorpay order
+
     // total_amount is stored in PAISE (bigint) — pass directly, no multiplication needed
     const razorpayOrder = await razorpay.orders.create({
       amount: order.total_amount,   // already in paise ✓
@@ -108,6 +146,16 @@ export async function handleWebhook(req, res, next) {
     const webhookSignature = req.headers['x-razorpay-signature'];
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
+    // Session N: Guard — if secret is not configured, return 503 (not 500)
+    // so Razorpay doesn't keep retrying with exponential backoff.
+    if (!webhookSecret) {
+      logger.error('handleWebhook: RAZORPAY_WEBHOOK_SECRET is not set');
+      return res.status(503).json({ success: false, error: { message: 'Webhook not configured' } });
+    }
+    if (!webhookSignature) {
+      return res.status(400).json({ success: false, error: { message: 'Missing webhook signature' } });
+    }
+
     const expectedSignature = crypto
       .createHmac('sha256', webhookSecret)
       .update(JSON.stringify(req.body))
@@ -133,7 +181,7 @@ export async function handleWebhook(req, res, next) {
         // The worker handles retry on failure (up to 3 attempts via pg-boss).
         const { data: orderRow } = await supabaseAdmin
           .from('orders')
-          .select('id')
+          .select('id, customer_id, order_number')
           .eq('razorpay_order_id', razorpayOrderId)
           .maybeSingle();
 
@@ -143,18 +191,97 @@ export async function handleWebhook(req, res, next) {
               orderId: orderRow.id, razorpayPaymentId, error: err.message,
             })
           );
+
+          // Session O: Notify customer that payment was captured and order is confirmed
+          if (orderRow.customer_id && orderRow.order_number) {
+            notificationService.notifyOrderPlaced(
+              orderRow.customer_id,
+              orderRow.order_number,
+              orderRow.id,
+            );
+          }
         }
         break;
       }
       case 'payment.failed': {
         const { order_id: razorpayOrderId, error_description } = payload.payment.entity;
+
+        // 1. Mark payment as failed
         await supabaseAdmin
           .from('payments')
           .update({ status: 'failed', failure_reason: error_description, updated_at: new Date().toISOString() })
           .eq('razorpay_order_id', razorpayOrderId);
-        // TODO: Cancel associated sub_orders if payment fails
+
+        // Session N — H1: Cancel all sub_orders, restore stock, notify customer
+        // (Previously was a TODO — orphaned sub_orders would pile up on payment failure)
+        try {
+          // Find the parent order and its sub_orders
+          const { data: parentOrder } = await supabaseAdmin
+            .from('orders')
+            .select('id, customer_id, order_number')
+            .eq('razorpay_order_id', razorpayOrderId)
+            .maybeSingle();
+
+          if (parentOrder) {
+            const { data: subOrders } = await supabaseAdmin
+              .from('sub_orders')
+              .select('id, shop_id')
+              .eq('order_id', parentOrder.id)
+              .not('status', 'in', '("cancelled","rejected","delivered")');
+
+            if (subOrders?.length) {
+              // Cancel all active sub_orders
+              await supabaseAdmin
+                .from('sub_orders')
+                .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
+                .in('id', subOrders.map(s => s.id));
+
+              // Restore stock for each sub_order's items
+              for (const sub of subOrders) {
+                const { data: items } = await supabaseAdmin
+                  .from('order_items')
+                  .select('product_id, quantity, shop_id')
+                  .eq('sub_order_id', sub.id);
+
+                if (items?.length) {
+                  for (const item of items) {
+                    await supabaseAdmin.rpc('increment_inventory_stock', {
+                      p_shop_id:   sub.shop_id,
+                      p_product_id: item.product_id,
+                      p_quantity:  item.quantity,
+                    }).catch(err => logger.warn('webhook: stock restore failed', {
+                      subOrderId: sub.id, productId: item.product_id, error: err.message,
+                    }));
+                  }
+                }
+              }
+            }
+
+            // Notify customer — non-blocking, fire-and-forget
+            const { default: notificationService } = await import('../services/notification.service.js');
+            notificationService.sendNotification(
+              parentOrder.customer_id,
+              'payment_failed',
+              'Payment Failed',
+              `Payment for Order #${parentOrder.order_number} could not be processed. ${error_description || 'Please try again.'}`,
+              { order_id: parentOrder.id, order_number: parentOrder.order_number },
+              true, // sendSms
+            ).catch(() => {});
+
+            logger.info('webhook: payment.failed — sub_orders cancelled, stock restored', {
+              orderId:       parentOrder.id,
+              subOrderCount: subOrders?.length ?? 0,
+              reason:        error_description,
+            });
+          }
+        } catch (cleanupErr) {
+          // Cleanup failure is logged but must NOT cause webhook to fail (Razorpay retries on non-200)
+          logger.error('webhook: payment.failed cleanup failed', { error: cleanupErr.message, razorpayOrderId });
+        }
+
         break;
       }
+
       case 'refund.created': {
         // Razorpay has accepted the refund and it's now being processed.
         // Our refund row was already inserted by payment.service.initiateRefund().
@@ -231,5 +358,44 @@ export async function handleWebhook(req, res, next) {
     res.status(200).json({ success: true });
   } catch (err) {
     next(err);
+  }
+}
+
+// ── P10-4: POST /payments/razorpayx/webhook ──────────────────
+// RazorpayX payout status webhook (separate from payment gateway).
+// Signature verified using RAZORPAYX_WEBHOOK_SECRET via HMAC-SHA256.
+// Always returns 200 — non-200 causes RazorpayX to retry.
+export async function handleRazorpayXWebhook(req, res, next) {
+  try {
+    const signature = req.headers['x-razorpay-signature'] || '';
+
+    // Extract raw body string BEFORE parsing — needed for HMAC verification.
+    // JSON.stringify(parsedObject) changes key order/whitespace vs original bytes.
+    let rawBody;
+    let payload;
+    if (Buffer.isBuffer(req.body)) {
+      rawBody  = req.body.toString('utf8');
+      payload  = JSON.parse(rawBody);
+    } else if (typeof req.body === 'string') {
+      rawBody  = req.body;
+      payload  = JSON.parse(rawBody);
+    } else {
+      // express.json() already parsed it — rawBody unavailable, fall back
+      rawBody  = undefined;
+      payload  = req.body;
+    }
+
+    const { handlePayoutWebhook } = await import('../services/razorpay-payout.service.js');
+    await handlePayoutWebhook(payload, signature, rawBody);
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    // Log but still 200 — prevents infinite retry loop from RazorpayX
+    logger.error('RazorpayX webhook error', { error: err.message });
+    if (err.status === 401) {
+      // Signature mismatch — return 400 to reject forged requests
+      return res.status(400).json({ success: false, message: 'Invalid signature' });
+    }
+    res.status(200).json({ success: true });
   }
 }

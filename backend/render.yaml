@@ -17,7 +17,7 @@ services:
     region: singapore   # Closest to India (Patna) with low latency
     plan: starter       # $7/month — upgrade to standard once live
 
-    buildCommand: npm install --production
+    buildCommand: npm install --production && node src/scripts/migrate.js
     startCommand: npm start
     autoDeploy: false   # P8-1: Never auto-deploy to prod — CI pipeline deploys via hook
 
@@ -89,8 +89,16 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
 
-      - key: FAST2SMS_API_KEY
+      # SMS — Twilio (DLT-registered sender for India)
+      # Replace FAST2SMS_API_KEY — sms.service.js uses Twilio SDK
+      - key: TWILIO_ACCOUNT_SID
         sync: false
+
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+
+      - key: TWILIO_PHONE_NUMBER
+        sync: false          # DLT-approved sender ID or virtual number
 
       - key: EXPO_ACCESS_TOKEN
         sync: false
@@ -99,6 +107,29 @@ services:
         sync: false
 
       - key: JWT_SECRET
+        sync: false
+
+      # Error monitoring — backend Sentry
+      - key: SENTRY_DSN
+        sync: false
+
+      # Internal cron auth — required for reassign-expired-offers and reconcile-refunds crons
+      - key: INTERNAL_API_KEY
+        sync: false
+
+      # RazorpayX payout webhook signature verification
+      - key: RAZORPAYX_WEBHOOK_SECRET
+        sync: false
+
+      # WhatsApp via WATI (optional — degraded gracefully if unset)
+      - key: WATI_API_URL
+        sync: false
+
+      - key: WATI_API_TOKEN
+        sync: false
+
+      # Google Maps geocoding (optional — for address validation)
+      - key: GOOGLE_MAPS_API_KEY
         sync: false
 
   # ── Staging ────────────────────────────────────────────────
@@ -183,8 +214,15 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
 
-      - key: FAST2SMS_API_KEY
-        sync: false     # Leave blank in staging — don't send real SMS to test numbers
+      # Leave Twilio blank in staging — prevents real SMS to test numbers
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
 
       - key: EXPO_ACCESS_TOKEN
         sync: false
@@ -193,4 +231,51 @@ services:
         sync: false
 
       - key: JWT_SECRET
+        sync: false
+
+      - key: INTERNAL_API_KEY
+        sync: false
+
+      - key: SENTRY_DSN
+        sync: false
+
+      - key: RAZORPAYX_WEBHOOK_SECRET
+        sync: false
+
+  # ── Cron Services ──────────────────────────────────────────────────────────
+  # These call internal endpoints secured by X-Internal-Key header.
+  # Both crons are idempotent and safe to run on every trigger.
+
+  # Re-assigns delivery offers that expired without rider acceptance (60s window).
+  # Runs every minute so no order waits more than ~1 min after offer expiry.
+  - type: cron
+    name: reassign-expired-offers
+    runtime: node
+    region: singapore
+    plan: starter
+    schedule: "*/1 * * * *"
+    buildCommand: echo "no build needed"
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      https://api.tezznirmaan.in/api/v1/internal/cron/reassign-expired-offers
+      -H "X-Internal-Key: $INTERNAL_API_KEY"
+    envVars:
+      - key: INTERNAL_API_KEY
+        sync: false
+
+  # Syncs Razorpay refund status for any refunds stuck in 'initiated' > 5 min.
+  # Catches cases where the Razorpay webhook was missed.
+  - type: cron
+    name: reconcile-refunds
+    runtime: node
+    region: singapore
+    plan: starter
+    schedule: "*/15 * * * *"
+    buildCommand: echo "no build needed"
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      https://api.tezznirmaan.in/api/v1/internal/cron/reconcile-refunds
+      -H "X-Internal-Key: $INTERNAL_API_KEY"
+    envVars:
+      - key: INTERNAL_API_KEY
         sync: false

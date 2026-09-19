@@ -1,0 +1,22 @@
+User-agent: *
+
+# TezzNirmaan Web Storefront — P9-5
+# Allow storefront and marketing pages for indexing
+Allow: /storefront/
+Allow: /storefront/category/
+Allow: /storefront/product/
+Allow: /storefront/city/
+Allow: /privacy
+Allow: /terms
+Allow: /shop-signup
+
+# Block internal tools — dashboard, admin panel, rider app, APIs
+Disallow: /dashboard/
+Disallow: /admin/
+Disallow: /rider/
+Disallow: /login
+Disallow: /api/
+Disallow: /storefront/auth
+Disallow: /storefront/cart
+
+Sitemap: https://tezznirmaan.in/sitemap.xml

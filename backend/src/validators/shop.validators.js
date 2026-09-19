@@ -31,6 +31,10 @@ export const addToInventorySchema = z.object({
   stockQuantity: z.number().nonnegative('Stock cannot be negative'),
   lowStockThreshold: z.number().nonnegative().default(5),
   isListed: z.boolean().default(true),
+  // Phase 12 additions (migration 081)
+  shopSku:         z.string().max(100).optional(),
+  shopImages:      z.array(z.string().url()).default([]),
+  shopDescription: z.string().max(5000).optional(),
 });
 
 /** PATCH /shop/inventory/:inventoryId — Update inventory item */
@@ -41,6 +45,20 @@ export const updateInventoryItemSchema = z.object({
   stockQuantity: z.number().nonnegative().optional(),
   lowStockThreshold: z.number().nonnegative().optional(),
   isListed: z.boolean().optional(),
+  
+  // Accept snake_case variants from dashboard / mobile directly
+  cost_price: z.number().positive().optional(),
+  stock_quantity: z.number().nonnegative().optional(),
+  low_stock_threshold: z.number().nonnegative().optional(),
+  is_listed: z.boolean().optional(),
+
+  // Phase 12 additions (migration 081)
+  shopSku:         z.string().max(100).optional(),
+  shopImages:      z.array(z.string().url()).optional(),
+  shopDescription: z.string().max(5000).optional(),
+  shop_sku:        z.string().max(100).optional(),
+  shop_images:     z.array(z.string().url()).optional(),
+  shop_description: z.string().max(5000).optional(),
 });
 
 /** PATCH /shop/inventory/bulk-update */

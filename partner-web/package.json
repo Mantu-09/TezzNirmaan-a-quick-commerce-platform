@@ -1,0 +1,45 @@
+{
+  "name": "tezznirmaan-partner-web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3003",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "generate-sitemap": "node scripts/generate-sitemap.js",
+    "prebuild": "node scripts/generate-sitemap.js",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:headed": "playwright test --headed",
+    "e2e:ci": "playwright test --reporter=github",
+    "e2e:debug": "playwright test --debug",
+    "e2e:setup": "playwright test --project=setup"
+  },
+  "dependencies": {
+    "@ducanh2912/next-pwa": "^10.2.9",
+    "@sentry/browser": "^10.72.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "@tanstack/react-query": "^5.50.1",
+    "axios": "^1.7.2",
+    "date-fns": "^3.6.0",
+    "js-cookie": "^3.0.5",
+    "leaflet": "^1.9.4",
+    "next": "14.2.5",
+    "posthog-js": "^1.422.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-leaflet": "^4.2.1",
+    "recharts": "^3.10.1",
+    "socket.io-client": "^4.8.3",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^20.19.43",
+    "@types/react": "^18.3.31",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.5",
+    "typescript": "^5.5.4"
+  }
+}

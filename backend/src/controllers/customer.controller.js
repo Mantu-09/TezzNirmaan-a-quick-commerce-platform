@@ -279,10 +279,27 @@ export async function placeOrder(req, res, next) {
     const userId = req.user.id;
     const { addressId, paymentMethod, notes, scheduledSlot, promoCode } = req.body;
 
-    logger.info('Place order request', { userId, paymentMethod, hasPromo: !!promoCode });
-    const result = await orderService.placeOrder(userId, { addressId, paymentMethod, notes, scheduledSlot, promoCode });
+    // P19-4: First-order welcome discount — auto-apply if no prior orders
+    let effectivePromo = promoCode;
+    let firstOrderDiscount = false;
+    try {
+      const { supabaseAdmin } = await import('../config/supabase.js');
+      const { data: profile } = await supabaseAdmin
+        .from('profiles').select('id, first_order_discount_used').eq('auth_id', userId).single();
+      if (profile && !profile.first_order_discount_used && !effectivePromo) {
+        const { count } = await supabaseAdmin
+          .from('orders').select('id', { count: 'exact', head: true }).eq('customer_id', profile.id);
+        if ((count || 0) === 0) {
+          effectivePromo  = 'WELCOME10'; // handled in order service as 10% up to Rs.100
+          firstOrderDiscount = true;
+        }
+      }
+    } catch { /* non-fatal */ }
 
-    res.status(201).json({ success: true, data: result });
+    logger.info('Place order request', { userId, paymentMethod, hasPromo: !!effectivePromo, firstOrderDiscount });
+    const result = await orderService.placeOrder(userId, { addressId, paymentMethod, notes, scheduledSlot, promoCode: effectivePromo });
+
+    res.status(201).json({ success: true, data: { ...result, firstOrderDiscount } });
   } catch (err) {
     next(err);
   }

@@ -218,15 +218,23 @@ export async function placeOrder(userId, { addressId, paymentMethod, notes, sche
   // Step 1b: P1-C — Validate promo code if provided (server-side, never trust client discount)
   let appliedPromo = null;
   if (promoCode?.trim()) {
-    const { validatePromo } = await import('../promo.service.js');
-    const tier = preview.tiers.quick && preview.tiers.scheduled ? null
-      : preview.tiers.quick ? 'quick' : 'scheduled';
-    appliedPromo = await validatePromo(
-      promoCode,
-      userId,
-      preview.grandTotalPaise,   // validate against server-computed total
-      tier
-    );
+    // P19-4: WELCOME10 is a system-issued first-order code — handle without DB lookup
+    if (promoCode.trim().toUpperCase() === 'WELCOME10') {
+      const discountPaise = Math.min(Math.round(preview.grandTotalPaise * 0.10), 10000); // 10% up to Rs.100
+      appliedPromo = { discount_paise: discountPaise, code: 'WELCOME10', description: '10% first-order welcome discount' };
+      // Mark profile as having used the first-order discount
+      supabaseAdmin.from('profiles').update({ first_order_discount_used: true }).eq('auth_id', userId).catch(() => {});
+    } else {
+      const { validatePromo } = await import('../promo.service.js');
+      const tier = preview.tiers.quick && preview.tiers.scheduled ? null
+        : preview.tiers.quick ? 'quick' : 'scheduled';
+      appliedPromo = await validatePromo(
+        promoCode,
+        userId,
+        preview.grandTotalPaise,   // validate against server-computed total
+        tier
+      );
+    }
   }
 
   // Step 2: Build totals per tier

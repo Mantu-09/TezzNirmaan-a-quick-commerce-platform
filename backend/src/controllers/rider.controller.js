@@ -93,6 +93,52 @@ export async function cancelDelivery(req, res, next) {
   }
 }
 
+// ── Session I: Rider Accept Flow ──────────────────────────────────────────────
+
+/** GET /rider/deliveries/offered — returns any pending delivery offer for this rider */
+export async function getOfferedDeliveries(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { data: rider } = await supabaseAdmin
+      .from('riders').select('id').eq('profile_id', userId).single();
+    if (!rider) return res.json({ success: true, data: { offers: [] } });
+
+    const { data: offers } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select(`
+        id, status, distance_km, offered_at, offer_expires_at,
+        sub_orders(
+          id, sub_order_number, delivery_tier, total_amount,
+          orders(order_number, delivery_address_snapshot),
+          order_items(product_name, quantity, unit),
+          shops(name, lat, lng, address)
+        )
+      `)
+      .eq('rider_id', rider.id)
+      .eq('status', 'offered')
+      .eq('is_active', true)
+      .gt('offer_expires_at', new Date().toISOString()) // only non-expired
+      .order('offered_at', { ascending: false });
+
+    res.json({ success: true, data: { offers: offers || [] } });
+  } catch (err) { next(err); }
+}
+
+/** POST /rider/deliveries/:assignmentId/decline — rider rejects the offer */
+export async function declineDelivery(req, res, next) {
+  try {
+    const userId = req.user.id;
+    const { assignmentId } = req.params;
+    const { reason } = req.body;
+
+    const result = await deliveryService.declineDelivery(assignmentId, userId, reason);
+    logger.info('Rider declined delivery offer', { assignmentId, userId, reason });
+    res.json({ success: true, data: result });
+  } catch (err) { next(err); }
+}
+
+
+
 export async function updateStatus(req, res, next) {
   try {
     const userId = req.user.id;
@@ -281,10 +327,11 @@ export async function getActiveDelivery(req, res, next) {
       .select(`
         id, status, assigned_at,
         sub_orders (
-          id, total_amount, payment_method,
+          id, total_amount,
           orders (
             order_number,
-            addresses ( street, city, state )
+            addresses ( street, city, state ),
+            payments ( method )
           ),
           shops ( name, address )
         )
@@ -296,6 +343,12 @@ export async function getActiveDelivery(req, res, next) {
       .maybeSingle();
 
     if (error) throw new AppError(error.message, 500);
+
+    // R3: Flatten payment_method onto sub_order for isCOD check on mobile
+    if (data?.sub_orders?.orders?.payments) {
+      const pmts = data.sub_orders.orders.payments;
+      data.sub_orders.payment_method = Array.isArray(pmts) ? pmts[0]?.method : pmts?.method;
+    }
 
     res.json({ success: true, data: data || null });
   } catch (err) {
@@ -482,3 +535,386 @@ export async function reportIssue(req, res, next) {
   }
 }
 
+// ── P10-4: GET /rider/bank-account ────────────────────────────
+// Returns the rider's registered fund account (if any).
+// Never returns the full account number — only last4.
+export async function getBankAccount(req, res, next) {
+  try {
+    const riderId = req.user.id;
+    const { data, error } = await supabaseAdmin
+      .from('rider_fund_accounts')
+      .select('id, account_name, account_number_last4, ifsc_code, bank_name, is_verified, created_at')
+      .eq('rider_id', riderId)
+      .maybeSingle();
+
+    if (error) throw error;
+    res.json({ success: true, data: { bank_account: data || null } });
+  } catch (err) {
+    logger.error('GET /rider/bank-account error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── P10-4: POST /rider/bank-account ──────────────────────────
+// Registers rider's bank account with RazorpayX and saves to DB.
+// Flow: fetch rider profile → createContact → createFundAccount → save
+export async function saveBankAccount(req, res, next) {
+  try {
+    const riderId = req.user.id;
+    const { account_name, account_number, ifsc_code, bank_name } = req.body;
+
+    // Validate required fields
+    if (!account_name || !account_number || !ifsc_code) {
+      return res.status(400).json({
+        success: false,
+        message: 'account_name, account_number, and ifsc_code are required',
+      });
+    }
+
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc_code.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid IFSC code format (e.g. SBIN0001234)',
+      });
+    }
+
+    // Fetch rider profile for RazorpayX contact name + phone
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('full_name, phone')
+      .eq('id', riderId)
+      .single();
+
+    // Lazy-import service to keep startup fast
+    const { registerBankAccount } = await import('../services/razorpay-payout.service.js');
+
+    const row = await registerBankAccount(
+      riderId,
+      { name: profile?.full_name, phone: profile?.phone },
+      { account_name, account_number, ifsc_code, bank_name }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Bank account registered successfully. Earnings will be transferred here.',
+      data:    {
+        id:                   row.id,
+        account_name:         row.account_name,
+        account_number_last4: row.account_number_last4,
+        ifsc_code:            row.ifsc_code,
+        bank_name:            row.bank_name,
+        is_verified:          row.is_verified,
+      },
+    });
+  } catch (err) {
+    logger.error('POST /rider/bank-account error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── R3: POST /rider/delivery/:assignmentId/collect-cod ────────────────────
+// Rider confirms they have collected cash from the customer.
+// Only valid for COD orders that have been delivered.
+export async function collectCod(req, res, next) {
+  try {
+    const riderId = req.user.id;
+    const { assignmentId } = req.params;
+
+    // 1. Fetch assignment — verify it belongs to this rider and is delivered
+    const { data: rider, error: riderErr } = await supabaseAdmin
+      .from('riders')
+      .select('id')
+      .eq('profile_id', riderId)
+      .single();
+
+    if (riderErr || !rider) {
+      return res.status(404).json({ success: false, message: 'Rider profile not found.' });
+    }
+
+    const { data: assignment, error: aErr } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select('id, rider_id, sub_order_id, status, rider_cash_collected_at')
+      .eq('id', assignmentId)
+      .single();
+
+    if (aErr || !assignment) {
+      return res.status(404).json({ success: false, message: 'Assignment not found.' });
+    }
+    if (assignment.rider_id !== rider.id) {
+      return res.status(403).json({ success: false, message: 'Not your assignment.' });
+    }
+    if (assignment.status !== 'delivered') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot collect COD — delivery status is "${assignment.status}". Must be "delivered".`,
+      });
+    }
+    if (assignment.rider_cash_collected_at) {
+      return res.json({
+        success: true,
+        message: 'COD already marked as collected.',
+        already_collected: true,
+      });
+    }
+
+    // 2. Verify it is a COD order via the payments table
+    const { data: subOrder, error: soErr } = await supabaseAdmin
+      .from('sub_orders')
+      .select('id, order_id, total_amount, cod_status')
+      .eq('id', assignment.sub_order_id)
+      .single();
+
+    if (soErr || !subOrder) {
+      return res.status(404).json({ success: false, message: 'Sub-order not found.' });
+    }
+
+    const { data: payment } = await supabaseAdmin
+      .from('payments')
+      .select('id, method')
+      .eq('order_id', subOrder.order_id)
+      .maybeSingle();
+
+    if (!payment || payment.method !== 'cod') {
+      return res.status(400).json({
+        success: false,
+        message: 'This is not a COD order. No cash collection needed.',
+      });
+    }
+
+    const now = new Date().toISOString();
+
+    // 3. Update delivery_assignments.rider_cash_collected_at
+    const { error: daErr } = await supabaseAdmin
+      .from('delivery_assignments')
+      .update({ rider_cash_collected_at: now })
+      .eq('id', assignmentId);
+
+    if (daErr) throw daErr;
+
+    // 4. Update sub_orders.cod_status → collected
+    const { error: soUpdateErr } = await supabaseAdmin
+      .from('sub_orders')
+      .update({ cod_status: 'collected', cod_collected_at: now, updated_at: now })
+      .eq('id', subOrder.id);
+
+    if (soUpdateErr) throw soUpdateErr;
+
+    // 5. Update payments.cod_collected_by + cod_collected_at
+    const { error: payErr } = await supabaseAdmin
+      .from('payments')
+      .update({ cod_collected_by: rider.id, cod_collected_at: now })
+      .eq('id', payment.id);
+
+    if (payErr) {
+      // Non-fatal — payments row update is best-effort (main truth is on sub_orders)
+      logger.warn('[collectCod] payments update failed (non-fatal)', { error: payErr.message });
+    }
+
+    logger.info('Rider collected COD', { assignmentId, riderId, amount: subOrder.total_amount });
+
+    res.json({
+      success: true,
+      message: 'Cash collection confirmed. Thank you!',
+      data: {
+        assignment_id:    assignmentId,
+        sub_order_id:     subOrder.id,
+        cod_status:       'collected',
+        cod_collected_at: now,
+        amount_paise:     subOrder.total_amount,
+      },
+    });
+  } catch (err) {
+    logger.error('POST /rider/delivery/:assignmentId/collect-cod error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── R3: GET /rider/cod/summary ────────────────────────────────────────────
+// Returns total pending cash the rider is holding (collected but not remitted).
+export async function getRiderCodSummary(req, res, next) {
+  try {
+    const riderId = req.user.id;
+
+    const { data: rider, error: riderErr } = await supabaseAdmin
+      .from('riders')
+      .select('id')
+      .eq('profile_id', riderId)
+      .single();
+
+    if (riderErr || !rider) {
+      return res.status(404).json({ success: false, message: 'Rider profile not found.' });
+    }
+
+    // Find all delivery_assignments for this rider that have collected COD
+    // Join to sub_orders to get cod_status + amounts
+    const { data: assignments, error: aErr } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select(`
+        id, rider_cash_collected_at, status,
+        sub_orders (
+          id, sub_order_number, total_amount, cod_status, cod_collected_at,
+          orders ( order_number, delivery_address_snapshot )
+        )
+      `)
+      .eq('rider_id', rider.id)
+      .eq('status', 'delivered')
+      .not('rider_cash_collected_at', 'is', null)
+      .order('rider_cash_collected_at', { ascending: false });
+
+    if (aErr) throw aErr;
+
+    // Filter: only 'collected' (not yet remitted)
+    const collectedRows = (assignments || []).filter(
+      a => a.sub_orders?.cod_status === 'collected'
+    );
+
+    const totalPaise = collectedRows.reduce(
+      (sum, a) => sum + (a.sub_orders?.total_amount || 0), 0
+    );
+
+    res.json({
+      success: true,
+      data: {
+        total_cash_held_paise: totalPaise,
+        count: collectedRows.length,
+        orders: collectedRows.map(a => ({
+          assignment_id:        a.id,
+          sub_order_id:         a.sub_orders?.id,
+          sub_order_number:     a.sub_orders?.sub_order_number,
+          order_number:         a.sub_orders?.orders?.order_number,
+          amount_paise:         a.sub_orders?.total_amount,
+          cod_collected_at:     a.rider_cash_collected_at,
+          delivery_address:     a.sub_orders?.orders?.delivery_address_snapshot?.street || '',
+        })),
+      },
+    });
+  } catch (err) {
+    logger.error('GET /rider/cod/summary error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── Phase G: Rider KYC Onboarding ─────────────────────────────────────────
+
+// POST /rider/kyc/upload-url — get pre-signed R2 URL for a KYC document
+export async function getKycUploadUrl(req, res, next) {
+  try {
+    const { getUploadUrl, isR2Configured } = await import('../services/image.service.js');
+    const { AppError } = await import('../utils/errors.js');
+
+    if (!isR2Configured()) {
+      // Graceful fallback in dev — return mock URL so mobile onboarding doesn't block
+      logger.warn('R2 not configured — returning mock KYC upload URL');
+      return res.json({
+        success: true,
+        data: {
+          upload_url: 'https://upload.example.com/mock',
+          public_url: `https://cdn.tezznirmaan.in/kyc/mock-${Date.now()}.jpg`,
+          key:        `kyc/mock-${Date.now()}`,
+        },
+      });
+    }
+
+    const VALID_DOC_TYPES = [
+      'aadhaar_front', 'aadhaar_back', 'pan_card',
+      'driving_license', 'vehicle_rc', 'vehicle_insurance',
+    ];
+    const { doc_type, content_type = 'image/jpeg' } = req.body;
+    if (!VALID_DOC_TYPES.includes(doc_type)) {
+      throw new AppError(`Invalid doc_type. Must be one of: ${VALID_DOC_TYPES.join(', ')}`, 400);
+    }
+
+    const result = await getUploadUrl(`kyc/${req.user.id}`, content_type);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// POST /rider/onboarding/submit — full KYC payload from the 5-step mobile wizard
+export async function submitKycOnboarding(req, res, next) {
+  try {
+    const riderId = req.user.id;
+    const { personal, vehicle, documents, bank } = req.body;
+
+    if (!personal?.full_name)              throw new AppError('personal.full_name is required', 400);
+    if (!vehicle?.registration_number)     throw new AppError('vehicle.registration_number is required', 400);
+    if (!bank?.account_number || !bank?.ifsc_code) throw new AppError('bank account_number and ifsc_code are required', 400);
+
+    // Guard: don't overwrite a completed KYC
+    const { data: profile } = await supabaseAdmin
+      .from('profiles').select('kyc_complete').eq('id', riderId).single();
+
+    if (profile?.kyc_complete) {
+      return res.status(409).json({
+        success: false,
+        error: { code: 'KYC_ALREADY_COMPLETE', message: 'KYC is already complete for this rider.' },
+      });
+    }
+
+    // Upsert into rider_kyc table
+    const { error: kycErr } = await supabaseAdmin
+      .from('rider_kyc')
+      .upsert({
+        rider_id:              riderId,
+        full_name:             personal.full_name,
+        dob:                   personal.dob    || null,
+        gender:                personal.gender || null,
+        vehicle_type:          vehicle.type,
+        vehicle_reg_number:    vehicle.registration_number.toUpperCase(),
+        vehicle_model:         vehicle.model   || null,
+        aadhaar_front_url:     documents?.aadhaar_front     || null,
+        aadhaar_back_url:      documents?.aadhaar_back      || null,
+        pan_card_url:          documents?.pan_card          || null,
+        driving_license_url:   documents?.driving_license   || null,
+        vehicle_rc_url:        documents?.vehicle_rc        || null,
+        vehicle_insurance_url: documents?.vehicle_insurance || null,
+        bank_account_number:   bank.account_number,
+        bank_ifsc:             bank.ifsc_code.toUpperCase(),
+        bank_holder_name:      bank.account_holder_name || personal.full_name,
+        bank_name:             bank.bank_name           || null,
+        status:                'pending_review',
+        submitted_at:          new Date().toISOString(),
+      }, { onConflict: 'rider_id' });
+
+    if (kycErr) throw kycErr;
+
+    // Mark profile: kyc_submitted = true
+    await supabaseAdmin.from('profiles')
+      .update({ full_name: personal.full_name, kyc_submitted: true, updated_at: new Date().toISOString() })
+      .eq('id', riderId);
+
+    logger.info({ riderId }, 'Rider KYC submitted');
+
+    res.status(201).json({
+      success: true,
+      data: { message: 'KYC submitted. Review takes 24–48 hours.', status: 'pending_review' },
+    });
+  } catch (err) { next(err); }
+}
+
+// GET /rider/kyc/status — check current KYC approval state
+export async function getKycStatus(req, res, next) {
+  try {
+    const riderId = req.user.id;
+    const [{ data: kyc }, { data: profile }] = await Promise.all([
+      supabaseAdmin.from('rider_kyc')
+        .select('status, submitted_at, reviewed_at, rejection_reason')
+        .eq('rider_id', riderId).maybeSingle(),
+      supabaseAdmin.from('profiles')
+        .select('kyc_submitted, kyc_complete').eq('id', riderId).single(),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        kyc_submitted:    profile?.kyc_submitted  || false,
+        kyc_complete:     profile?.kyc_complete   || false,
+        status:           kyc?.status             || 'not_submitted',
+        submitted_at:     kyc?.submitted_at       || null,
+        reviewed_at:      kyc?.reviewed_at        || null,
+        rejection_reason: kyc?.rejection_reason   || null,
+      },
+    });
+  } catch (err) { next(err); }
+}

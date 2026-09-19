@@ -42,11 +42,19 @@ export const createProductSchema = z.object({
     'piece', 'kg', 'bag', 'litre', 'meter', 'sq_ft', 'cu_ft',
     'bundle', 'box', 'pair', 'set', 'ton', 'brass', 'cft',
   ]).default('piece'),
-  weightKg:   z.number().nonnegative().optional(),
-  isBulk:     z.boolean().default(false),
-  hsnCode:    z.string().max(20).optional(),
-  gstPercent: z.number().nonnegative().max(100).default(18),
-  images:     z.array(z.string().url()).default([]),
+  weightKg:       z.number().nonnegative().optional(),
+  isBulk:         z.boolean().default(false),
+  hsnCode:        z.string().max(20).optional(),
+  gstPercent:     z.number().nonnegative().max(100).default(18),
+  images:         z.array(z.string().url()).default([]),
+  // Phase 12 additions (migration 080)
+  specifications: z.record(z.string(), z.any()).default({}),
+  dimensions:     z.object({
+    length_cm: z.number().nonnegative().optional(),
+    width_cm:  z.number().nonnegative().optional(),
+    height_cm: z.number().nonnegative().optional(),
+    volume_cft: z.number().nonnegative().optional(),
+  }).optional(),
 });
 
 /** PATCH /admin/products/:id */

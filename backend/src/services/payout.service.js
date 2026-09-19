@@ -40,7 +40,7 @@
 import { razorpay }        from '../config/razorpay.js';
 import { supabaseAdmin }   from '../config/supabase.js';
 import { AppError, NotFoundError, ValidationError } from '../utils/errors.js';
-import { send as sendSms } from './sms.service.js';
+import { sendSMS as sendSms } from './sms.service.js';
 import logger              from '../utils/logger.js';
 
 // ── Commission lookup (mirrors settlement.service.js) ─────────

@@ -64,7 +64,11 @@ export async function getDeliveryDetail(assignmentId, profileId) {
       sub_orders(
         *,
         order_items(*),
-        orders(*, profiles!customer_id(full_name, phone))
+        orders(
+          *,
+          profiles!customer_id(full_name, phone),
+          payments(method, status, cod_status)
+        )
       )
     `)
     .eq('id', assignmentId)
@@ -72,6 +76,15 @@ export async function getDeliveryDetail(assignmentId, profileId) {
     .single();
 
   if (error || !data) throw new NotFoundError('Delivery assignment not found');
+
+  // R3: Flatten payment_method onto sub_order for easy isCOD check on mobile.
+  // payments is an array (one per order); grab the first row's method.
+  const payments = data.sub_orders?.orders?.payments;
+  const paymentMethod = Array.isArray(payments) ? payments[0]?.method : payments?.method;
+  if (data.sub_orders && paymentMethod) {
+    data.sub_orders.payment_method = paymentMethod;
+  }
+
   return data;
 }
 
@@ -416,25 +429,80 @@ export async function cancelDelivery(assignmentId, profileId, reason) {
   return { message: 'Delivery cancelled, sub-order returned to ready_for_pickup' };
 }
 
-/** Rider accepts/acknowledges a delivery assignment. */
+
+/** Rider accepts a delivery offer — transitions offered → accepted. */
 export async function acceptDelivery(assignmentId, profileId) {
   const { data: rider } = await supabaseAdmin
-    .from('riders')
-    .select('id')
-    .eq('profile_id', profileId)
+    .from('riders').select('id').eq('profile_id', profileId).single();
+  if (!rider) throw new NotFoundError('Rider not found');
+
+  const now = new Date().toISOString();
+
+  // Only accept if status is 'offered' AND offer hasn't expired
+  const { data: assignment, error } = await supabaseAdmin
+    .from('delivery_assignments')
+    .update({ status: 'accepted', accepted_at: now, updated_at: now })
+    .eq('id', assignmentId)
+    .eq('rider_id', rider.id)
+    .eq('status', 'offered')               // guard: must still be in offered state
+    .eq('is_active', true)
+    .gt('offer_expires_at', now)           // guard: must not be expired
+    .select('id, sub_order_id, sub_orders(order_id)')
     .single();
+
+  if (error || !assignment) {
+    // Check why — expired vs already accepted vs wrong rider
+    const { data: check } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select('status, offer_expires_at, rider_id')
+      .eq('id', assignmentId)
+      .single();
+
+    if (!check) throw new NotFoundError('Delivery assignment not found');
+    if (check.rider_id !== rider.id) throw new AppError('This delivery was not offered to you', 403);
+    if (check.status !== 'offered')  throw new AppError(`Cannot accept: delivery is already ${check.status}`, 409);
+    if (new Date(check.offer_expires_at) <= new Date()) throw new AppError('Offer has expired — a new delivery will be offered shortly', 410);
+    throw new AppError('Could not accept delivery', 400);
+  }
+
+  logger.info('Rider accepted delivery offer', { assignmentId, riderId: rider.id });
+  return { message: 'Delivery accepted', assignmentId: assignment.id };
+}
+
+/** Rider declines a delivery offer — marks declined and triggers reassignment. */
+export async function declineDelivery(assignmentId, profileId, reason) {
+  const { data: rider } = await supabaseAdmin
+    .from('riders').select('id').eq('profile_id', profileId).single();
   if (!rider) throw new NotFoundError('Rider not found');
 
   const now = new Date().toISOString();
   const { data: assignment, error } = await supabaseAdmin
     .from('delivery_assignments')
-    .update({ accepted_at: now, updated_at: now })
+    .update({ status: 'declined', declined_at: now, is_active: false, updated_at: now })
     .eq('id', assignmentId)
     .eq('rider_id', rider.id)
-    .eq('is_active', true)
-    .select('id, sub_order_id')
+    .eq('status', 'offered')
+    .select('id, sub_orders(order_id)')
     .single();
 
-  if (error || !assignment) throw new NotFoundError('Active delivery assignment not found');
-  return { message: 'Delivery accepted', assignmentId: assignment.id };
+  if (error || !assignment) throw new NotFoundError('Active offered delivery not found');
+
+  logger.info('Rider declined delivery offer', { assignmentId, riderId: rider.id, reason });
+
+  // Reassign to next best rider (fire-and-forget)
+  const orderId = assignment.sub_orders?.order_id;
+  if (orderId) {
+    setImmediate(async () => {
+      try {
+        const { autoAssignRider } = await import('./rider-assignment.service.js');
+        const result = await autoAssignRider(orderId, { excludeRiderIds: [rider.id] });
+        if (!result.assigned) logger.warn('[Decline] No rider available for reassignment', { orderId });
+      } catch (e) {
+        logger.error('[Decline] Reassignment failed', { orderId, error: e.message });
+      }
+    });
+  }
+
+  return { message: 'Delivery declined. Looking for another rider.' };
 }
+

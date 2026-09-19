@@ -1,0 +1,40 @@
+# ──────────────────────────────────────────────────────────────
+# Flow 03: Checkout — place a Cash on Delivery order
+#
+# Pre-conditions:
+#   • User logged in with a saved delivery address
+#     (first run: tap "Add Delivery Address" manually, save to account)
+#   • At least one item in cart (run flow 02 first, or rely on persisted cart)
+#
+# Verified against source:
+#   • CartScreen.jsx → footer button: "Proceed to Checkout →"
+#   • CheckoutScreen.jsx → section heading: "📍 Delivery Address"
+#                       → payment option label: "Cash on Delivery"
+#                       → CTA button: "Place Order" (when paymentMethod === 'cod')
+#   • OrderConfirmationScreen.jsx → hero title: "Order Placed!"
+#                                → CTA button: "Track Order"
+# ──────────────────────────────────────────────────────────────
+
+appId: in.tezznirmaan.app
+---
+# 1. Navigate to cart (run browse flow or assume cart has items)
+- runFlow: "02_browse_and_cart.yaml"
+
+# 2. Proceed to checkout
+- tapOn: "Proceed to Checkout →"
+
+# 3. Checkout screen
+- assertVisible: "Checkout"          # navigation header title
+
+# 4. Delivery Address section should be visible
+- assertVisible: "📍 Delivery Address"
+
+# 5. Select Cash on Delivery payment method
+- tapOn: "Cash on Delivery"
+
+# 6. Place order
+- tapOn: "Place Order"
+
+# 7. Order confirmation
+- assertVisible: "Order Placed!"
+- assertVisible: "Track Order"

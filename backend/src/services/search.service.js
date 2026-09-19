@@ -164,6 +164,10 @@ async function searchWithTypesense(processedQuery, shopId, mergedFilters, sort, 
     facets:         result.facet_counts || [],
     queryTimeMs:    result.search_time_ms,
     searchEngine:   'typesense',
+    // P19-6: Did you mean? — populated when Typesense applies typo correction
+    did_you_mean:   result.request_params?.q !== processedQuery
+                    ? result.request_params?.q || null
+                    : null,
   };
 }
 
@@ -192,8 +196,8 @@ function normaliseRow(row) {
     weightKg:     p.weight_kg,
     isBulk:       p.is_bulk,
     gstPercent:   p.gst_percent,
-    brandName:    p.brand_name || p.brands?.name || null,
-    categoryName: p.category_name || p.categories?.name || null,
+    brandName:    p.brands?.name || null,
+    categoryName: p.categories?.name || null,
     categoryId:   p.categories?.id || null,
     categorySlug: p.categories?.slug || null,
     searchEngine: 'postgres',
@@ -213,7 +217,7 @@ async function searchWithPostgres(processedQuery, shopId, mergedFilters, sort, p
       products!inner(
         id, name, slug, description, images,
         delivery_tier, unit, weight_kg, is_bulk,
-        gst_percent, brand_name, category_name,
+        gst_percent,
         categories!category_id(id, name, slug),
         brands!brand_id(id, name)
       )
@@ -227,7 +231,8 @@ async function searchWithPostgres(processedQuery, shopId, mergedFilters, sort, p
   if (minPrice) q = q.gte('price', Math.round(+minPrice * 100));
   if (maxPrice) q = q.lte('price', Math.round(+maxPrice * 100));
   if (category)     q = q.eq('products.category_id',   category);
-  if (categoryName) q = q.eq('products.category_name', categoryName);
+  // categoryName filter: match via categories join — note: Supabase filters on joined tables use FK syntax
+  if (categoryName) q = q.eq('categories.name', categoryName);
   if (tier)     q = q.eq('products.delivery_tier', tier);
   if (unitHint) q = q.eq('products.unit', unitHint);
 
@@ -269,7 +274,7 @@ async function ilikeFallback(query, shopId, filters, sort, page, limit) {
       id, price, mrp, stock_quantity, is_in_stock, is_listed, shop_id, product_id,
       products!inner(
         id, name, slug, description, images, delivery_tier, unit, weight_kg,
-        is_bulk, gst_percent, brand_name, category_name,
+        is_bulk, gst_percent,
         categories!category_id(id, name, slug), brands!brand_id(id, name)
       )
     `, { count: 'exact' })
@@ -359,6 +364,23 @@ export async function searchProducts(
 
   // Cache for 60 seconds
   await cacheSet(cacheKey, JSON.stringify(payload), 60);
+
+  // M1: Log search query for analytics (fire-and-forget — never blocks search response)
+  if (query?.trim()) {
+    (async () => {
+      try {
+        await supabaseAdmin
+          .from('search_logs')
+          .insert({
+            query:         processedQuery || query,
+            results_count: payload.total || 0,
+            city_id:       filters.city_id || null,
+            profile_id:    filters.profile_id || null,
+          });
+      } catch { /* non-fatal */ }
+    })();
+  }
+
   return payload;
 }
 
@@ -403,7 +425,7 @@ export async function getSuggestions(query, shopId = null, limit = 5) {
   const buildBase = () =>
     supabaseAdmin
       .from('products')
-      .select('id, name, unit, brand_name, delivery_tier, images')
+      .select('id, name, unit, delivery_tier, images, brands!brand_id(name)')
       .eq('is_active', true);
 
   const [prefix, contains] = await Promise.all([
@@ -420,7 +442,7 @@ export async function getSuggestions(query, shopId = null, limit = 5) {
       id:           row.id,
       name:         row.name,
       unit:         row.unit,
-      brand:        row.brand_name || null,
+      brand:        row.brands?.name || null,
       deliveryTier: row.delivery_tier,
       thumbnail:    Array.isArray(row.images) ? row.images[0] : null,
     });

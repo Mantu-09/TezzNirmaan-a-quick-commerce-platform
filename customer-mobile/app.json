@@ -1,0 +1,127 @@
+{
+  "expo": {
+    "name": "TezzNirmaan",
+    "slug": "tezznirmaan",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "tezznirmaan",
+    "platforms": ["ios", "android"],
+
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1A1A18"
+    },
+
+    "assetBundlePatterns": ["**/*"],
+
+    "updates": {
+      "url": "https://u.expo.dev/TODO_GET_FROM_expo.dev_Account_Projects_TezzNirmaan",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+
+
+    "android": {
+      "package": "in.tezznirmaan.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#E8521A"
+      },
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "tezznirmaan.in",
+              "pathPrefix": "/order"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+
+    "ios": {
+      "bundleIdentifier": "in.tezznirmaan.app",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "TezzNirmaan uses your location to find nearby shops and calculate delivery estimates.",
+        "NSLocationAlwaysUsageDescription": "TezzNirmaan uses your location for accurate delivery tracking.",
+        "NSCameraUsageDescription": "TezzNirmaan uses your camera to take photos for return requests and proof of delivery.",
+        "NSPhotoLibraryUsageDescription": "TezzNirmaan accesses your photos to upload images for return requests."
+      }
+    },
+
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      "expo-location",
+      "expo-image-picker",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "backgroundColor": "#1A1A18"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#E8521A",
+          "sounds": ["./assets/sounds/order-alert.wav"],
+          "androidMode": "default"
+        }
+      ],
+      [
+        "expo-updates",
+        {
+          "username": "mantu-09"
+        }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "note": "Set SENTRY_AUTH_TOKEN in EAS secrets to upload source maps"
+        }
+      ]
+    ],
+
+    "extra": {
+      "eas": {
+        "projectId": "TODO_GET_FROM_expo.dev_Account_Projects_TezzNirmaan"
+      },
+      "apiBaseUrl":      "https://api.tezznirmaan.in/api/v1",
+      "supabaseUrl":     "https://pzakkypaodqcmqjyiaco.supabase.co",
+      "supabaseAnonKey": "sb_publishable_fGiDtZKZKAE8mYAO7Rnr7g_jDqdJoZX",
+      "sentryDsn":       "TODO_GET_FROM_sentry.io_Projects_TezzNirmaan_ClientKeys",
+      "razorpayKeyId":   "TODO_GET_FROM_razorpay.com_Settings_APIKeys_LiveKey"
+    },
+
+
+    "owner": "mantu-09"
+  }
+}

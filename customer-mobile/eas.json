@@ -1,0 +1,66 @@
+{
+  "cli": {
+    "version": ">= 12.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      },
+      "ios": {
+        "simulator": true
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://localhost:3001",
+        "EXPO_PUBLIC_WS_URL": "ws://localhost:3001"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://tezznirmaan-backend-staging.onrender.com",
+        "EXPO_PUBLIC_WS_URL": "wss://tezznirmaan-api-staging.onrender.com",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_test_REPLACE_WITH_STAGING_KEY"
+      }
+    },
+    "production": {
+      "distribution": "store",
+      "channel": "production",
+      "android": {
+        "buildType": "app-bundle",
+        "autoIncrement": true
+      },
+      "ios": {
+        "autoIncrement": "version"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.tezznirmaan.in",
+        "EXPO_PUBLIC_WS_URL": "wss://api.tezznirmaan.in",
+        "EXPO_PUBLIC_R2_CDN_URL": "https://images.tezznirmaan.in",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_REPLACE_WITH_LIVE_KEY"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./google-play-key.json",
+        "track": "internal",
+        "changesNotSentForReview": false
+      },
+      "ios": {
+        "appleId":     "REPLACE_WITH_YOUR_APPLE_ID_EMAIL",
+        "ascAppId":    "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
+      }
+    }
+  }
+}

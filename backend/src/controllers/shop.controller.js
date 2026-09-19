@@ -30,9 +30,10 @@ export async function getShopOrders(req, res, next) {
         orders!inner(
           id, order_number, shop_id, placed_at, notes,
           delivery_address_snapshot,
-          profiles!customer_id(full_name, phone)
+          profiles!customer_id(full_name, phone),
+          payments(method)
         ),
-        order_items(id)
+        order_items(id, product_name, quantity)
       `, { count: 'exact' })
       .eq('orders.shop_id', shopId)
       .order('created_at', { ascending: false })
@@ -50,11 +51,18 @@ export async function getShopOrders(req, res, next) {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    // Annotate each sub-order with item count for quick display
-    const subOrders = (data || []).map(so => ({
-      ...so,
-      item_count: so.order_items?.length || 0,
-    }));
+    // Annotate each sub-order with item count + payment_method (flattened from payments join)
+    const subOrders = (data || []).map(so => {
+      const pmts = so.orders?.payments;
+      const paymentMethod = Array.isArray(pmts) ? pmts[0]?.method : pmts?.method;
+      return {
+        ...so,
+        payment_method: paymentMethod || 'cod', // default to cod (Bihar market)
+        items: so.order_items || [],
+        item_count: so.order_items?.length || 0,
+        delivery_address: so.orders?.delivery_address_snapshot,
+      };
+    });
 
     res.json({
       success: true,
@@ -76,12 +84,13 @@ export async function getSubOrderDetail(req, res, next) {
     const { data, error } = await supabaseAdmin
       .from('sub_orders')
       .select(`
-        *,
+        *, cod_status,
         order_items(*),
         orders!inner(
           id, order_number, shop_id, placed_at, notes,
           payment_method, delivery_address_snapshot,
-          profiles!customer_id(id, full_name, phone)
+          profiles!customer_id(id, full_name, phone),
+          payments(method, status)
         ),
         delivery_assignments(
           id, assigned_at, accepted_at, picked_up_at, delivered_at,
@@ -276,10 +285,16 @@ export async function addToInventory(req, res, next) {
       stockQuantity = req.body.stock_quantity,
       lowStockThreshold = req.body.low_stock_threshold,
       isListed    = req.body.is_listed,
+      // Phase 12 additions (migration 081)
+      shopSku         = req.body.shop_sku,
+      shopImages      = req.body.shop_images,
+      shopDescription = req.body.shop_description,
     } = req.body;
 
     const item = await inventoryService.addToInventory(shopId, {
       productId, price, mrp, costPrice, stockQuantity, lowStockThreshold, isListed,
+      shopSku, shopImages, shopDescription,
+      updatedBy: req.user?.id,
     });
 
     res.status(201).json({ success: true, data: { item } });
@@ -304,6 +319,11 @@ export async function updateInventoryItem(req, res, next) {
       stockQuantity:     rawUpdates.stock_quantity ?? rawUpdates.stockQuantity,
       isListed:          rawUpdates.is_listed      ?? rawUpdates.isListed,
       lowStockThreshold: rawUpdates.low_stock_threshold ?? rawUpdates.lowStockThreshold,
+      // Phase 12 additions (migration 081)
+      shopSku:           rawUpdates.shop_sku       ?? rawUpdates.shopSku,
+      shopImages:        rawUpdates.shop_images     ?? rawUpdates.shopImages,
+      shopDescription:   rawUpdates.shop_description ?? rawUpdates.shopDescription,
+      updatedBy:         req.user?.id,
     };
 
     // Remove undefined keys so the service doesn't overwrite with undefined
@@ -538,6 +558,94 @@ export async function exportShopOrders(req, res, next) {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send('\uFEFF' + csv); // UTF-8 BOM for Excel compatibility
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Phase 12: Master Catalog Discovery ───────────────────────────────────────
+
+/**
+ * GET /shop/catalog
+ *
+ * Returns the master catalog merged with the shop's current inventory state.
+ * Each product carries an `inventory` field:
+ *   - null  → not yet in inventory ("Add to My Shop" shown)
+ *   - {...} → already in inventory with price/stock/listing status ("Edit in Inventory" shown)
+ *
+ * Query params:
+ *   search, category (uuid), tier (quick|scheduled),
+ *   hideExisting (bool, default false) — hide already-inventoried products,
+ *   page, limit
+ *
+ * Authorization: shop_owner or shop_staff via requireShopAccess
+ */
+export async function getMasterCatalog(req, res, next) {
+  try {
+    const shopId = req.shopId;
+    const {
+      search, category, tier,
+      hideExisting = 'false',
+      page = 1, limit = 40,
+    } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
+
+    // Step 1: Fetch all shop_inventory rows for this shop (for status overlay)
+    const { data: inventoryRows } = await supabaseAdmin
+      .from('shop_inventory')
+      .select('product_id, id, price, mrp, stock_quantity, is_listed, is_in_stock')
+      .eq('shop_id', shopId);
+
+    const inventoryMap = {};
+    for (const row of inventoryRows || []) {
+      inventoryMap[row.product_id] = row;
+    }
+
+    const existingProductIds = Object.keys(inventoryMap);
+
+    // Step 2: Build catalog query
+    let query = supabaseAdmin
+      .from('products')
+      .select(`
+        id, name, slug, description, delivery_tier, unit, weight_kg,
+        gst_percent, hsn_code, images, primary_image_url, specifications,
+        categories ( id, name, slug ),
+        brands ( id, name )
+      `, { count: 'exact' })
+      .eq('is_active', true)
+      .order('name', { ascending: true })
+      .range(offset, offset + Number(limit) - 1);
+
+    // When hideExisting=true, exclude products already in inventory
+    if (hideExisting === 'true' && existingProductIds.length > 0) {
+      query = query.not('id', 'in', `(${existingProductIds.join(',')})`);
+    }
+
+    if (category) query = query.eq('category_id', category);
+    if (tier)     query = query.eq('delivery_tier', tier);
+    if (search)   query = query.ilike('name', `%${search}%`);
+
+    const { data: products, count, error } = await query;
+    if (error) throw error;
+
+    // Step 3: Attach inventory status to each product
+    const enriched = (products || []).map(p => ({
+      ...p,
+      inventory: inventoryMap[p.id] || null,   // null = not in inventory yet
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        products: enriched,
+        pagination: {
+          page:  Number(page),
+          limit: Number(limit),
+          total: count || 0,
+        },
+        already_in_inventory: existingProductIds.length,
+      },
+    });
   } catch (err) {
     next(err);
   }

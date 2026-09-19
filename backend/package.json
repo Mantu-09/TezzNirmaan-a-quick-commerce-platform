@@ -11,8 +11,12 @@
     "test": "node --experimental-vm-modules node_modules/.bin/jest --runInBand",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",
     "test:coverage": "node --experimental-vm-modules node_modules/.bin/jest --coverage",
-    "index:typesense": "node --env-file=.env src/scripts/index-products.js"
+    "index:typesense": "node --env-file=.env src/scripts/index-products.js",
+    "migrate": "node --env-file=.env src/scripts/migrate.js",
+    "migrate:dry": "node --env-file=.env src/scripts/migrate.js --dry",
+    "migrate:status": "node --env-file=.env src/scripts/migrate.js --status"
   },
+
   "keywords": [
     "quick-commerce",
     "construction",
@@ -24,7 +28,9 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1099.0",
     "@aws-sdk/s3-request-presigner": "^3.1099.0",
+    "@google/generative-ai": "^0.24.1",
     "@googlemaps/google-maps-services-js": "^3.4.2",
+    "@sentry/node": "^10.72.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "@supabase/supabase-js": "^2.45.0",
     "@upstash/redis": "^1.38.0",
@@ -38,10 +44,12 @@
     "ioredis": "^5.11.1",
     "morgan": "^1.10.0",
     "multer": "^2.2.0",
+    "pdfkit": "^0.20.1",
     "pg": "^8.22.0",
     "pg-boss": "^12.26.0",
     "razorpay": "^2.9.4",
     "socket.io": "^4.8.3",
+    "twilio": "^6.1.0",
     "typesense": "^3.0.6",
     "ws": "^8.21.1",
     "zod": "^3.23.8"

@@ -9,6 +9,8 @@
 //   • Request ID injected into logger context
 // ────────────────────────────────────────────────────────────
 import 'dotenv/config';
+import { checkEnv } from './scripts/env-check.js'; // P18-7: startup env audit
+checkEnv(); // Run immediately — logs missing vars, exits in production if CRITICAL missing
 import { randomUUID } from 'crypto';
 import logger from './utils/logger.js';
 import express from 'express';
@@ -23,13 +25,39 @@ import { responseTimeLogger } from './middleware/responseTime.js'; // P7-6
 import { NotFoundError } from './utils/errors.js';
 import { supabaseAdmin } from './config/supabase.js';
 import { redisPing, isRedisMock } from './config/redis.js';
+import * as Sentry from '@sentry/node'; // P4: initialized below if SENTRY_DSN set
 
 const app = express();
+
+// ── P4 Fix: Sentry Error Tracking ────────────────────────
+// Sentry was installed in package.json but never initialized.
+// Must init before routes so all unhandled exceptions are captured.
+if (process.env.SENTRY_DSN && process.env.NODE_ENV === 'production') {
+  Sentry.init({
+    dsn:              process.env.SENTRY_DSN,
+    environment:      process.env.NODE_ENV,
+    tracesSampleRate: 0.1, // 10% of transactions — tune up once stable
+  });
+  logger.info('Sentry initialized for error tracking');
+}
 
 // ── Security Headers ──────────────────────────────────────
 app.use(helmet());
 
-// ── CORS ──────────────────────────────────────────────────
+// ── P6 Fix: Trust Proxy ───────────────────────────────────
+// REQUIRED for Render (and any proxy/load balancer) — without this,
+// express-rate-limit sees all requests from the same internal IP
+// (the load balancer) and rate limiting becomes completely ineffective.
+app.set('trust proxy', 1);
+
+// ── P5 Fix: CORS — no wildcard fallback in production ────
+// Previously defaulted to '*' if CORS_ORIGIN was unset — any browser
+// could hit the API. Now we crash on startup in production if unset.
+if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGIN) {
+  logger.error('FATAL: CORS_ORIGIN env var is not set. Refusing to start in production with wildcard CORS.');
+  process.exit(1);
+}
+
 const allowedOrigins = (process.env.CORS_ORIGIN || '*').split(',').map(o => o.trim());
 app.use(cors({
   origin: allowedOrigins.includes('*') ? '*' : (origin, cb) => {
@@ -40,6 +68,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
 
 // ── B7: Request ID middleware ─────────────────────────────
 // Attaches a unique X-Request-Id to every response.

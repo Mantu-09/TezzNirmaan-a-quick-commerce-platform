@@ -1,16 +1,17 @@
-// ────────────────────────────────────────────────────────────
-// Admin Controller — Platform Admin only
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Admin Controller â€” Platform Admin only
 // All routes require authenticate + requireRole('platform_admin')
 // Uses supabaseAdmin (service role) to bypass RLS
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import { supabaseAdmin } from '../config/supabase.js';
-import { AppError, NotFoundError } from '../utils/errors.js';
+import { AppError, NotFoundError, ValidationError } from '../utils/errors.js';
+
 import * as smsService from '../services/sms.service.js';
 import { getPlatformAnalytics } from '../services/platform-analytics.service.js'; // P2-A
 import { getLiveStats }         from '../services/realtime-analytics.service.js';  // P9-3
 import logger from '../utils/logger.js';
 
-// ── Helpers ───────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function makeSlug(name) {
   const base = name
@@ -21,7 +22,7 @@ function makeSlug(name) {
   return `${base}-${suffix}`;
 }
 
-// ── Shops ─────────────────────────────────────────────────────
+// â”€â”€ Shops â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getShops(req, res, next) {
   try {
@@ -56,7 +57,7 @@ export async function getShop(req, res, next) {
 }
 
 /**
- * POST /admin/shops — B2
+ * POST /admin/shops â€” B2
  *
  * Creates a Supabase Auth user for the shop owner (phone, email+password for staff login),
  * inserts profile + shop rows. Sends SMS with credentials.
@@ -98,7 +99,7 @@ export async function createShop(req, res, next) {
       ? owner_phone
       : `+91${owner_phone.replace(/\D/g, '')}`;
 
-    // Internal email alias for staff login (phone → email)
+    // Internal email alias for staff login (phone â†’ email)
     const internalEmail = `${normalisedPhone.replace(/\D/g, '')}@tezznirmaan.internal`;
     const tempPassword  = `TN${Math.random().toString(36).slice(2, 8).toUpperCase()}@2024`;
 
@@ -164,7 +165,7 @@ export async function createShop(req, res, next) {
       }
     }
 
-    // 3. Insert shop row — PostGIS location uses WKT SRID notation
+    // 3. Insert shop row â€” PostGIS location uses WKT SRID notation
     const slug = makeSlug(shop_name);
     const { data: shop, error: shopErr } = await supabaseAdmin
       .from('shops')
@@ -198,7 +199,7 @@ export async function createShop(req, res, next) {
     logger.info('Shop created', { shopId: shop.id, shopName: shop_name, ownerId });
 
     // 4. SMS credentials to owner (non-blocking)
-    smsService.send(
+    smsService.sendSMS(
       normalisedPhone,
       `Welcome to TezzNirmaan! Shop "${shop_name}" created.\n` +
       `Phone: ${normalisedPhone} | Password: ${tempPassword}\n` +
@@ -210,7 +211,7 @@ export async function createShop(req, res, next) {
       data: {
         shop,
         owner:        { id: ownerId, phone: normalisedPhone, name: owner_name },
-        tempPassword, // Show once — admin should relay securely
+        tempPassword, // Show once â€” admin should relay securely
         message:      'Shop created. Owner notified via SMS.',
       },
     });
@@ -242,7 +243,7 @@ export async function toggleShopStatus(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ── Orders (admin view) ───────────────────────────────────────
+// â”€â”€ Orders (admin view) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getAllOrders(req, res, next) {
   try {
@@ -261,7 +262,7 @@ export async function getAllOrders(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ── Products (master catalog) ─────────────────────────────────
+// â”€â”€ Products (master catalog) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getProducts(req, res, next) {
   try {
@@ -284,7 +285,8 @@ export async function getProducts(req, res, next) {
 export async function createProduct(req, res, next) {
   try {
     const { name, slug, description, categoryId, brandId, deliveryTier,
-      unit, weightKg, isBulk, hsnCode, gstPercent, images } = req.body;
+      unit, weightKg, isBulk, hsnCode, gstPercent, images,
+      specifications, dimensions } = req.body;
     const { data, error } = await supabaseAdmin
       .from('products')
       .insert({
@@ -294,6 +296,8 @@ export async function createProduct(req, res, next) {
         delivery_tier: deliveryTier,
         unit, weight_kg: weightKg, is_bulk: isBulk,
         hsn_code: hsnCode, gst_percent: gstPercent, images,
+        specifications: specifications || {},
+        dimensions:     dimensions || null,
       })
       .select().single();
     if (error) throw error;
@@ -317,6 +321,9 @@ export async function updateProduct(req, res, next) {
     if (u.hsnCode !== undefined)      dbUpdates.hsn_code = u.hsnCode;
     if (u.gstPercent !== undefined)   dbUpdates.gst_percent = u.gstPercent;
     if (u.images !== undefined)       dbUpdates.images = u.images;
+    // Phase 12 additions (migration 080)
+    if (u.specifications !== undefined) dbUpdates.specifications = u.specifications;
+    if (u.dimensions !== undefined)     dbUpdates.dimensions = u.dimensions;
     const { data, error } = await supabaseAdmin
       .from('products').update(dbUpdates).eq('id', id).select().single();
     if (error) throw error;
@@ -325,7 +332,154 @@ export async function updateProduct(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ── Riders ────────────────────────────────────────────────────
+// Phase 12: GET /admin/products/:id â€” single product for edit page
+export async function getProductById(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .select('*, categories(id, name, slug), brands(id, name)')
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    if (!data) throw new NotFoundError('Product not found');
+    res.json({ success: true, data: { product: data } });
+  } catch (err) { next(err); }
+}
+
+// Phase 12: PATCH /admin/products/:id/archive â€” toggle is_active
+export async function archiveProduct(req, res, next) {
+  try {
+    const { id } = req.params;
+    // First fetch current status, then toggle
+    const { data: existing, error: fetchErr } = await supabaseAdmin
+      .from('products').select('id, is_active').eq('id', id).single();
+    if (fetchErr || !existing) throw new NotFoundError('Product not found');
+    const newStatus = !existing.is_active;
+    const { data, error } = await supabaseAdmin
+      .from('products')
+      .update({ is_active: newStatus, updated_at: new Date().toISOString() })
+      .eq('id', id).select().single();
+    if (error) throw error;
+    res.json({ success: true, data: { product: data, archived: !newStatus } });
+  } catch (err) { next(err); }
+}
+
+// Phase 12: GET /admin/categories
+export async function getAdminCategories(req, res, next) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('categories')
+      .select('id, name, slug, parent_id')
+      .order('name', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: { categories: data || [] } });
+  } catch (err) { next(err); }
+}
+
+// Session J: POST /admin/categories
+export async function createCategory(req, res, next) {
+  try {
+    const { name, slug, parent_id } = req.body;
+    if (!name?.trim()) throw new ValidationError('name is required');
+    const cleanSlug = slug?.trim() || name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const { data, error } = await supabaseAdmin
+      .from('categories')
+      .insert({ name: name.trim(), slug: cleanSlug, parent_id: parent_id || null })
+      .select('id, name, slug, parent_id')
+      .single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data: { category: data } });
+  } catch (err) { next(err); }
+}
+
+// Session J: PATCH /admin/categories/:id
+export async function updateCategory(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { name, slug, parent_id } = req.body;
+    const updates = {};
+    if (name !== undefined)      updates.name      = name.trim();
+    if (slug !== undefined)      updates.slug      = slug.trim();
+    if (parent_id !== undefined) updates.parent_id = parent_id || null;
+    if (!Object.keys(updates).length) throw new ValidationError('No fields to update');
+    const { data, error } = await supabaseAdmin
+      .from('categories').update(updates).eq('id', id)
+      .select('id, name, slug, parent_id').single();
+    if (error) throw error;
+    if (!data) throw new NotFoundError('Category not found');
+    res.json({ success: true, data: { category: data } });
+  } catch (err) { next(err); }
+}
+
+// Session J: DELETE /admin/categories/:id
+export async function deleteCategory(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { error } = await supabaseAdmin.from('categories').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ success: true, message: 'Category deleted' });
+  } catch (err) { next(err); }
+}
+
+// Phase 12: GET /admin/brands
+export async function getAdminBrands(req, res, next) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('brands')
+      .select('id, name, slug')
+      .order('name', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: { brands: data || [] } });
+  } catch (err) { next(err); }
+}
+
+// Session J: POST /admin/brands
+export async function createBrand(req, res, next) {
+  try {
+    const { name, slug } = req.body;
+    if (!name?.trim()) throw new ValidationError('name is required');
+    const cleanSlug = slug?.trim() || name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const { data, error } = await supabaseAdmin
+      .from('brands')
+      .insert({ name: name.trim(), slug: cleanSlug })
+      .select('id, name, slug')
+      .single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data: { brand: data } });
+  } catch (err) { next(err); }
+}
+
+// Session J: PATCH /admin/brands/:id
+export async function updateBrand(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { name, slug } = req.body;
+    const updates = {};
+    if (name !== undefined) updates.name = name.trim();
+    if (slug !== undefined) updates.slug = slug.trim();
+    if (!Object.keys(updates).length) throw new ValidationError('No fields to update');
+    const { data, error } = await supabaseAdmin
+      .from('brands').update(updates).eq('id', id)
+      .select('id, name, slug').single();
+    if (error) throw error;
+    if (!data) throw new NotFoundError('Brand not found');
+    res.json({ success: true, data: { brand: data } });
+  } catch (err) { next(err); }
+}
+
+// Session J: DELETE /admin/brands/:id
+export async function deleteBrand(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { error } = await supabaseAdmin.from('brands').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ success: true, message: 'Brand deleted' });
+  } catch (err) { next(err); }
+}
+
+
+// â”€â”€ Riders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getRiders(req, res, next) {
   try {
@@ -358,7 +512,7 @@ export async function getRiders(req, res, next) {
 }
 
 /**
- * POST /admin/riders — B2
+ * POST /admin/riders â€” B2
  *
  * Creates a Supabase Auth user for the rider (phone, email+password for staff login),
  * inserts profile + rider rows, creates rider_shop_assignments.
@@ -450,12 +604,12 @@ export async function createRider(req, res, next) {
         .upsert(assignments, { onConflict: 'rider_id,shop_id' });
       if (assignErr) {
         logger.error('Rider shop assignment failed', { error: assignErr.message, riderId: rider.id });
-        // Non-fatal — rider created; admin can assign shops later
+        // Non-fatal â€” rider created; admin can assign shops later
       }
     }
 
     // 5. SMS credentials
-    smsService.send(
+    smsService.sendSMS(
       normalisedPhone,
       `Welcome to TezzNirmaan! You are registered as a delivery rider.\n` +
       `Phone: ${normalisedPhone} | Password: ${tempPassword}\n` +
@@ -500,9 +654,9 @@ export async function assignRiderToShop(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ── Analytics ─────────────────────────────────────────────────
+// â”€â”€ Analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/** GET /admin/analytics/overview — lightweight overview (backwards compat) */
+/** GET /admin/analytics/overview â€” lightweight overview (backwards compat) */
 export async function getAnalyticsOverview(req, res, next) {
   try {
     const [shops, orders, riders] = await Promise.all([
@@ -518,7 +672,7 @@ export async function getAnalyticsOverview(req, res, next) {
   } catch (err) { next(err); }
 }
 
-/** GET /admin/analytics/platform?period=30d — P2-A full GMV dashboard */
+/** GET /admin/analytics/platform?period=30d â€” P2-A full GMV dashboard */
 export async function getPlatformAnalyticsHandler(req, res, next) {
   try {
     const { period = '30d' } = req.query;
@@ -533,7 +687,7 @@ export async function getPlatformAnalyticsHandler(req, res, next) {
 // Alias for backwards compatibility
 export const getDashboardOverview = getAnalyticsOverview;
 
-// ── Shop Interest Registrations (P4-1A) ─────────────────────
+// â”€â”€ Shop Interest Registrations (P4-1A) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function getShopInterests(req, res, next) {
   try {
@@ -597,19 +751,19 @@ export async function updateShopInterestStatus(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ── P9-3: GET /admin/analytics/live ───────────────────────────────────
+// â”€â”€ P9-3: GET /admin/analytics/live â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Real-time stats for the founder live dashboard.
-// Always fresh — no caching, no SSE. The dashboard polls every 30s.
-// Converts paise → rupees at the API boundary.
+// Always fresh â€” no caching, no SSE. The dashboard polls every 30s.
+// Converts paise â†’ rupees at the API boundary.
 export async function getLiveAnalytics(req, res, next) {
   try {
-    // Prevent any CDN / browser caching — these numbers must always be live
+    // Prevent any CDN / browser caching â€” these numbers must always be live
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
 
     const raw = await getLiveStats();
 
-    // Convert paise → rupees for display
+    // Convert paise â†’ rupees for display
     const data = {
       today: {
         orders:            raw.today.orders,
@@ -642,4 +796,293 @@ export async function getLiveAnalytics(req, res, next) {
     logger.error('GET /admin/analytics/live error', { error: err.message });
     next(err);
   }
+}
+
+
+// ── R3: GET /admin/cod/pending ───────────────────────────────────────────
+// Lists all sub_orders with cod_status = 'collected' (awaiting admin remittance).
+// Groups by rider for easy reconciliation.
+export async function getCodPending(req, res, next) {
+  try {
+    const { rider_id, page = 1, limit = 50 } = req.query;
+    const from = (Number(page) - 1) * Number(limit);
+
+    let query = supabaseAdmin
+      .from('sub_orders')
+      .select(`
+        id, sub_order_number, total_amount, cod_status,
+        cod_collected_at, delivered_at,
+        orders (
+          order_number, delivery_address_snapshot,
+          profiles!customer_id ( full_name, phone )
+        ),
+        delivery_assignments!sub_order_id (
+          rider_cash_collected_at,
+          riders!rider_id (
+            id,
+            profiles!profile_id ( full_name, phone )
+          )
+        )
+      `, { count: 'exact' })
+      .eq('cod_status', 'collected')
+      .order('cod_collected_at', { ascending: false })
+      .range(from, from + Number(limit) - 1);
+
+    if (rider_id) {
+      // Filter by rider: join through delivery_assignments
+      query = query.eq('delivery_assignments.riders.id', rider_id);
+    }
+
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: {
+        sub_orders: data || [],
+        pagination: { page: Number(page), limit: Number(limit), total: count },
+      },
+    });
+  } catch (err) {
+    logger.error('GET /admin/cod/pending error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── R3: GET /admin/cod/balances ───────────────────────────────────────────
+// Per-rider summary: how much cash each rider is currently holding.
+export async function getRiderCodBalances(req, res, next) {
+  try {
+    // Aggregate collected (not remitted) sub_orders grouped by rider
+    const { data: rows, error } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select(`
+        riders!rider_id (
+          id,
+          profiles!profile_id ( full_name, phone )
+        ),
+        sub_orders!sub_order_id (
+          total_amount, cod_status, cod_collected_at
+        )
+      `)
+      .eq('sub_orders.cod_status', 'collected')
+      .not('rider_cash_collected_at', 'is', null);
+
+    if (error) throw error;
+
+    // Group by rider
+    const byRider = {};
+    for (const row of rows || []) {
+      const riderInfo = row.riders;
+      if (!riderInfo) continue;
+      const riderId = riderInfo.id;
+      if (!byRider[riderId]) {
+        byRider[riderId] = {
+          rider_id:    riderId,
+          rider_name:  riderInfo.profiles?.full_name || 'Unknown',
+          rider_phone: riderInfo.profiles?.phone || '',
+          total_paise: 0,
+          order_count: 0,
+          oldest_collected_at: null,
+        };
+      }
+      const so = row.sub_orders;
+      if (so?.cod_status === 'collected') {
+        byRider[riderId].total_paise  += so.total_amount || 0;
+        byRider[riderId].order_count  += 1;
+        if (!byRider[riderId].oldest_collected_at ||
+            so.cod_collected_at < byRider[riderId].oldest_collected_at) {
+          byRider[riderId].oldest_collected_at = so.cod_collected_at;
+        }
+      }
+    }
+
+    const balances = Object.values(byRider)
+      .filter(r => r.total_paise > 0)
+      .sort((a, b) => b.total_paise - a.total_paise);
+
+    const grandTotal = balances.reduce((s, r) => s + r.total_paise, 0);
+
+    res.json({
+      success: true,
+      data: {
+        riders:              balances,
+        total_pending_paise: grandTotal,
+      },
+    });
+  } catch (err) {
+    logger.error('GET /admin/cod/balances error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── R3: POST /admin/cod/reconcile ─────────────────────────────────────────
+// Admin marks a batch of sub_orders as remitted.
+// Body: { sub_order_ids: string[], remittance_ref: string }
+export async function reconcileCod(req, res, next) {
+  try {
+    const { sub_order_ids, remittance_ref } = req.body;
+
+    if (!Array.isArray(sub_order_ids) || sub_order_ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'sub_order_ids must be a non-empty array.' });
+    }
+    if (!remittance_ref?.trim()) {
+      return res.status(400).json({ success: false, message: 'remittance_ref is required.' });
+    }
+
+    const now = new Date().toISOString();
+
+    // Validate: all must be in 'collected' state
+    const { data: subOrders, error: fetchErr } = await supabaseAdmin
+      .from('sub_orders')
+      .select('id, cod_status, total_amount')
+      .in('id', sub_order_ids);
+
+    if (fetchErr) throw fetchErr;
+
+    const invalid = (subOrders || []).filter(so => so.cod_status !== 'collected');
+    if (invalid.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `${invalid.length} sub_order(s) are not in 'collected' state and cannot be reconciled.`,
+        invalid_ids: invalid.map(so => so.id),
+      });
+    }
+
+    // Update all to 'remitted'
+    const { error: updateErr } = await supabaseAdmin
+      .from('sub_orders')
+      .update({
+        cod_status:       'remitted',
+        cod_remitted_at:  now,
+        cod_remittance_ref: remittance_ref.trim(),
+        updated_at:       now,
+      })
+      .in('id', sub_order_ids);
+
+    if (updateErr) throw updateErr;
+
+    const totalPaise = (subOrders || []).reduce((s, so) => s + (so.total_amount || 0), 0);
+
+    logger.info('Admin reconciled COD batch', {
+      admin: req.user.id,
+      count: sub_order_ids.length,
+      remittance_ref,
+      total_paise: totalPaise,
+    });
+
+    res.json({
+      success: true,
+      message: `${sub_order_ids.length} order(s) marked as remitted.`,
+      data: {
+        reconciled_count:   sub_order_ids.length,
+        total_paise:        totalPaise,
+        remittance_ref,
+        remitted_at:        now,
+      },
+    });
+  } catch (err) {
+    logger.error('POST /admin/cod/reconcile error', { error: err.message });
+    next(err);
+  }
+}
+
+// ── Phase E: POST /admin/staff ────────────────────────────────────────────
+/**
+ * POST /admin/staff
+ *
+ * Creates a Supabase Auth user + profile row for a staff member.
+ * Supports roles: 'shop_owner' | 'rider' | 'shop_staff'.
+ *
+ * Body: { full_name, phone, role }
+ *
+ * Returns the new user's credentials (tempPassword shown ONCE).
+ * Sends an SMS with login details — non-fatal if SMS fails.
+ */
+export async function createStaffAccount(req, res, next) {
+  try {
+    const { full_name, phone, role } = req.body;
+
+    if (!full_name || !phone || !role) {
+      throw new AppError('Missing required fields: full_name, phone, role', 400);
+    }
+
+    const VALID_ROLES = ['shop_owner', 'rider', 'shop_staff'];
+    if (!VALID_ROLES.includes(role)) {
+      throw new AppError(`role must be one of: ${VALID_ROLES.join(', ')}`, 400);
+    }
+
+    // Normalise phone to E.164 (+91...)
+    const normalisedPhone = phone.startsWith('+')
+      ? phone
+      : `+91${phone.replace(/\D/g, '')}`;
+
+    // Internal email: <digits>@tezznirmaan.internal
+    const digits        = normalisedPhone.replace(/\D/g, '');
+    const internalEmail = `${digits}@tezznirmaan.internal`;
+    const tempPassword  = `TN${Math.random().toString(36).slice(2, 8).toUpperCase()}@2024`;
+
+    // 1. Create Supabase Auth user
+    const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
+      email:         internalEmail,
+      password:      tempPassword,
+      phone:         normalisedPhone,
+      email_confirm: true,
+      phone_confirm: true,
+      app_metadata:  { role },
+      user_metadata: { full_name, phone: normalisedPhone },
+    });
+
+    if (authErr) {
+      if (authErr.message?.toLowerCase().includes('already registered') ||
+          authErr.message?.toLowerCase().includes('already exists')) {
+        throw new AppError(`A user with phone ${normalisedPhone} already exists`, 409, 'USER_EXISTS');
+      }
+      logger.error('createStaffAccount: auth user creation failed', { error: authErr.message });
+      throw new AppError('Failed to create auth user: ' + authErr.message, 500);
+    }
+
+    const userId = authData.user.id;
+
+    // 2. Upsert profile row
+    const { error: profileErr } = await supabaseAdmin
+      .from('profiles')
+      .upsert({
+        id:             userId,
+        phone:          normalisedPhone,
+        full_name,
+        role,
+        setup_complete: false,
+        updated_at:     new Date().toISOString(),
+      }, { onConflict: 'id' });
+
+    if (profileErr) {
+      logger.error('createStaffAccount: profile upsert failed', { error: profileErr.message, userId });
+      throw new AppError('Profile creation failed: ' + profileErr.message, 500);
+    }
+
+    logger.info('Staff account created', { userId, role, phone: normalisedPhone });
+
+    // 3. Send SMS credentials (non-fatal)
+    smsService.sendSMS(
+      normalisedPhone,
+      `Welcome to TezzNirmaan! Your account has been created.\n` +
+      `Role: ${role} | Phone: ${normalisedPhone} | Password: ${tempPassword}\n` +
+      `Log in at the TezzNirmaan dashboard.`
+    ).catch(err => logger.warn('createStaffAccount: SMS send failed (non-fatal)', { error: err.message }));
+
+    res.status(201).json({
+      success: true,
+      data: {
+        user: {
+          id:    userId,
+          phone: normalisedPhone,
+          role,
+          email: internalEmail,
+        },
+        tempPassword, // Show once — admin should relay securely
+        message: 'Staff account created. Login credentials sent via SMS.',
+      },
+    });
+  } catch (err) { next(err); }
 }

@@ -44,7 +44,10 @@ export async function getInventory(shopId, { search, inStock, page = 1, limit = 
 /**
  * Add a product to a shop's inventory.
  */
-export async function addToInventory(shopId, { productId, price, mrp, costPrice, stockQuantity, lowStockThreshold, isListed }) {
+export async function addToInventory(shopId, {
+  productId, price, mrp, costPrice, stockQuantity, lowStockThreshold, isListed,
+  shopSku, shopImages, shopDescription, updatedBy,
+}) {
   // Validate product exists and is active
   const { data: product, error: productError } = await supabaseAdmin
     .from('products')
@@ -55,22 +58,38 @@ export async function addToInventory(shopId, { productId, price, mrp, costPrice,
 
   if (productError || !product) throw new NotFoundError('Product not found or inactive');
 
+  const row = {
+    shop_id:             shopId,
+    product_id:          productId,
+    price,
+    mrp,
+    cost_price:          costPrice,
+    stock_quantity:      stockQuantity ?? 0,     // default 0 per Session D spec
+    low_stock_threshold: lowStockThreshold ?? 5,
+    is_listed:           isListed ?? false,       // new items start disabled per Session D spec
+  };
+
+  // Phase 12 optional overrides (migration 081)
+  if (shopSku)         row.shop_sku         = shopSku;
+  if (shopImages?.length) row.shop_images   = shopImages;
+  if (shopDescription) row.shop_description = shopDescription;
+  if (updatedBy)       row.updated_by       = updatedBy;
+
   const { data, error } = await supabaseAdmin
     .from('shop_inventory')
-    .insert({
-      shop_id:             shopId,
-      product_id:          productId,
-      price,
-      mrp,
-      cost_price:          costPrice,
-      stock_quantity:      stockQuantity,
-      low_stock_threshold: lowStockThreshold ?? 5,
-      is_listed:           isListed ?? true,
-    })
+    .insert(row)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    // Phase 12: UNIQUE(shop_id, product_id) violation — surface a friendly message
+    if (error.code === '23505') {
+      const err = new Error('This product is already in your inventory — edit it from the Inventory screen instead.');
+      err.status = 409;
+      throw err;
+    }
+    throw error;
+  }
 
   // P2-C: invalidate Redis cache
   invalidateShopInventoryCache(shopId).catch(() => {});
@@ -96,6 +115,11 @@ export async function updateInventoryItem(inventoryId, shopId, updates) {
   if (updates.stockQuantity    !== undefined) dbUpdates.stock_quantity   = updates.stockQuantity;
   if (updates.lowStockThreshold !== undefined) dbUpdates.low_stock_threshold = updates.lowStockThreshold;
   if (updates.isListed         !== undefined) dbUpdates.is_listed        = updates.isListed;
+  // Phase 12 additions (migration 081)
+  if (updates.shopSku          !== undefined) dbUpdates.shop_sku         = updates.shopSku;
+  if (updates.shopImages       !== undefined) dbUpdates.shop_images      = updates.shopImages;
+  if (updates.shopDescription  !== undefined) dbUpdates.shop_description = updates.shopDescription;
+  if (updates.updatedBy        !== undefined) dbUpdates.updated_by       = updates.updatedBy;
 
   const { data, error } = await supabaseAdmin
     .from('shop_inventory')

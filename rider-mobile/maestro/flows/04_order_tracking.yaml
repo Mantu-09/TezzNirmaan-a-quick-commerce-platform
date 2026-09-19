@@ -1,0 +1,45 @@
+# ──────────────────────────────────────────────────────────────
+# Flow 04: Order tracking — navigate to Orders tab and open tracking
+#
+# Pre-conditions:
+#   • At least one order exists for the test user
+#     (run flow 03 first; order persists server-side)
+#
+# Verified against source:
+#   • TabNavigator   → Orders tab label: "Orders"
+#   • OrdersStack    → screen title: "My Orders"
+#   • OrderHistoryScreen → "Track" button is rendered per order card
+#   • OrderTrackingScreen → navigation header title: "Track Order"
+#   • OrderTrackingScreen → WS live badge: "Live" or "Connecting"
+#     (badge only visible when order is in "out_for_delivery" state)
+#
+# NOTE: The "Live" badge only appears when status = out_for_delivery.
+#       In test/dev environments the order starts as "pending".
+#       assertVisible for "Live" is wrapped in an optional check.
+# ──────────────────────────────────────────────────────────────
+
+appId: in.tezznirmaan.app
+---
+# 1. Launch (preserve auth + order state)
+- launchApp
+
+# 2. Tap the Orders bottom tab
+- tapOn: "Orders"   # bottom tab label
+
+# 3. Order history screen
+- assertVisible: "My Orders"    # navigation header
+
+# 4. Tap the first Track button
+- tapOn:
+    text: "Track"
+    index: 0
+
+# 5. Order tracking screen header
+- assertVisible: "Track Order"  # navigation header
+
+# 6. Status bar labels should appear (at least "Placed" for a new order)
+- assertVisible: "Placed"
+
+# 7. WS connection badge — only asserted when out_for_delivery
+#    Comment this block out if running against orders in other statuses
+# - assertVisible: "Live"

@@ -104,7 +104,48 @@ router.get('/health', requireInternalKey, async (_req, res) => {
   });
 });
 
-// ── P9-3: GET /internal/analytics/snapshot ────────────────────
+// ── Session I: POST /internal/cron/reassign-expired-offers ────
+// Called every 30 seconds by Render cron (or any scheduler).
+// Finds delivery_assignments stuck in 'offered' past their expiry window
+// and re-offers to the next best available rider.
+//
+// Render cron setup (render.yaml or dashboard):
+//   schedule: */1 * * * *    (every 1 min — fine, function is idempotent)
+//   command:  curl -X POST https://api.tezznirmaan.in/api/v1/internal/cron/reassign-expired-offers
+//             -H "X-Internal-Key: $INTERNAL_API_KEY"
+router.post('/cron/reassign-expired-offers', requireInternalKey, async (_req, res) => {
+  try {
+    const { reassignExpiredOffers } = await import('../services/rider-assignment.service.js');
+    const result = await reassignExpiredOffers();
+    logger.info('[Cron] reassign-expired-offers completed', result);
+    res.json({ success: true, ...result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    logger.error('[Cron] reassign-expired-offers failed', { error: err.message });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ── Session L: POST /internal/cron/reconcile-refunds ──────────
+// Syncs Razorpay refund status for rows stuck in 'initiated'.
+// Razorpay webhooks can miss or be delayed — this cron catches them.
+//
+// Render cron setup:
+//   schedule: */15 * * * *  (every 15 minutes)
+//   command:  curl -X POST https://api.tezznirmaan.in/api/v1/internal/cron/reconcile-refunds
+//             -H "X-Internal-Key: $INTERNAL_API_KEY"
+router.post('/cron/reconcile-refunds', requireInternalKey, async (_req, res) => {
+  try {
+    const { reconcileRefunds } = await import('../services/refund-reconciliation.service.js');
+    const result = await reconcileRefunds();
+    logger.info('[Cron] reconcile-refunds completed', result);
+    res.json({ success: true, ...result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    logger.error('[Cron] reconcile-refunds failed', { error: err.message });
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
 // One-shot platform analytics for the founder dashboard initial load.
 // Returns current-day metrics: GMV, orders, active riders.
 // Used by the dashboard on mount before the SSE stream connects.

@@ -11,6 +11,12 @@ import { validate }        from '../middleware/validate.js';
 import { supabaseAdmin }   from '../config/supabase.js';
 import rateLimit           from 'express-rate-limit';
 import logger              from '../utils/logger.js';
+import {
+  getCityCatalog,
+  getProductById,
+} from '../services/catalog.service.js'; // P10-1
+import { verifyInvestorToken }   from '../services/investor-token.service.js';      // P11-5
+import { getInvestorMetrics }    from '../services/investor-analytics.service.js';  // P11-5
 
 const router = Router();
 
@@ -278,7 +284,8 @@ router.get('/public/shops/:slug/products', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Shop not found or inactive' });
     }
 
-    // Query products (via inventory, which links products to shops)
+    // Query products — DEPRECATED: uses `inventory` VIEW (remapped columns).
+    // New code should use `shop_inventory` directly with original column names.
     let query = supabaseAdmin
       .from('inventory')
       .select(`
@@ -447,6 +454,586 @@ router.get('/public/orders/track', trackingLimiter, async (req, res) => {
   } catch (err) {
     logger.error('GET /public/orders/track error', { error: err.message });
     return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// ── P13-1: GET /public/orders/track/:orderNumber/rider-location ─
+// Returns the last known rider GPS position for a given order number.
+// No auth required — used by the public tracking page.
+// Only returns location if rider is assigned and location is < 5 min old.
+router.get('/public/orders/track/:orderNumber/rider-location', async (req, res) => {
+  try {
+    const { orderNumber } = req.params;
+
+    // Get the order + assigned rider
+    const { data: order, error: orderErr } = await supabaseAdmin
+      .from('orders')
+      .select('id')
+      .eq('order_number', orderNumber.toUpperCase())
+      .maybeSingle();
+
+    if (orderErr || !order) {
+      return res.status(404).json({ success: false, message: 'Order not found' });
+    }
+
+    // Find accepted delivery assignment → rider_id
+    const { data: assignment } = await supabaseAdmin
+      .from('delivery_assignments')
+      .select('rider_id')
+      .eq('order_id', order.id)
+      .eq('status', 'accepted')
+      .maybeSingle();
+
+    if (!assignment?.rider_id) {
+      return res.json({ success: true, data: null }); // rider not yet assigned
+    }
+
+    // Get most recent location (within last 5 min)
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { data: loc } = await supabaseAdmin
+      .from('rider_locations')
+      .select('lat, lng, recorded_at')
+      .eq('rider_id', assignment.rider_id)
+      .gt('recorded_at', cutoff)
+      .order('recorded_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    return res.json({
+      success: true,
+      data: loc ? { lat: loc.lat, lng: loc.lng, timestamp: new Date(loc.recorded_at).getTime() } : null,
+    });
+  } catch (err) {
+    logger.error('GET rider-location error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+
+// Returns a single product by product_id.
+// Delegates to catalog.service.getProductById() — cheapest active
+// inventory entry across all shops.
+// No auth required. 120s CDN cache.
+router.get('/public/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id || id.length < 2 || id.length > 100) {
+      return res.status(400).json({ success: false, message: 'Invalid product id' });
+    }
+
+    const product = await getProductById(id);
+
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Product not found or out of stock' });
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=120, stale-while-revalidate=300');
+    return res.json({ success: true, data: product });
+  } catch (err) {
+    logger.error('GET /public/products/:id error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// ── P10-1: GET /public/catalog ──────────────────────────────────
+// City-scoped product catalog — production-quality via catalog.service.js.
+//
+// Query params:
+//   city     — city slug (default: 'patna')
+//   category — filter by category (optional)
+//   q        — search query (optional)
+//   page     — 1-indexed page number (default: 1)
+//   limit    — items per page (default: 20, max: 48)
+//   sort     — 'popular'|'price_asc'|'price_desc'|'newest' (default: 'popular')
+//   lat      — customer latitude for geo-sorted results (optional)
+//   lng      — customer longitude for geo-sorted results (optional)
+//
+// Improvements over P10-0:
+//   • Queries city_catalog MV (~30ms vs ~200ms for live join)
+//   • Deduplicates by product_id — same product from multiple shops
+//     shows once, cheapest price wins
+//   • Geo-aware: when lat/lng provided, nearest shop's stock is preferred
+//
+// Cache: 60s CDN-safe.
+const catalogLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max:      120,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  keyGenerator:    (req) => req.ip,
+  message: { success: false, error: { code: 'RATE_LIMIT', message: 'Too many requests. Slow down.' } },
+  skip: (req) => process.env.NODE_ENV === 'test',
+});
+
+router.get('/public/catalog', catalogLimiter, async (req, res) => {
+  try {
+    const result = await getCityCatalog({
+      citySlug: req.query.city     || 'patna',
+      category: req.query.category || null,
+      q:        req.query.q        || null,
+      sort:     req.query.sort     || 'popular',
+      page:     req.query.page     || 1,
+      limit:    req.query.limit    || 20,
+      lat:      req.query.lat      || null,
+      lng:      req.query.lng      || null,
+    });
+
+    // P13-8: Log search queries asynchronously (fire-and-forget)
+    if (req.query.q && req.query.q.trim()) {
+      const productCount = result?.products?.length ?? 0;
+      const citySlug     = req.query.city || 'patna';
+      setImmediate(async () => {
+        try {
+          // Resolve city_id from slug
+          const { data: city } = await supabaseAdmin
+            .from('cities')
+            .select('id')
+            .eq('name', citySlug)
+            .maybeSingle();
+
+          await supabaseAdmin.from('search_queries').insert({
+            query:        req.query.q.trim().toLowerCase(),
+            city_id:      city?.id || null,
+            result_count: productCount,
+            session_id:   req.headers['x-session-id'] || null,
+          });
+        } catch { /* Non-fatal: search still works even if logging fails */ }
+      });
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    if (err.code === 'CITY_NOT_FOUND') {
+      return res.status(404).json({ success: false, error: { code: 'CITY_NOT_FOUND', message: err.message } });
+    }
+    logger.error('GET /public/catalog error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+
+// ── P10-0 Fix 3: GET /public/cities/:slug ──────────────────────
+// Returns a single city by slug (name match) for city landing pages.
+// Returns 404 for inactive / non-existent cities (frontend shows waitlist).
+//
+// Cache: 1 hour — city data rarely changes.
+router.get('/public/cities/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+
+    if (!slug || slug.length < 2 || slug.length > 60) {
+      return res.status(400).json({ success: false, message: 'Invalid city slug' });
+    }
+
+    const { data: city, error } = await supabaseAdmin
+      .from('cities')
+      .select('id, name, state, center_lat, center_lng, delivery_radius_km, is_active, launch_date')
+      .ilike('name', `%${slug.replace(/-/g, ' ')}%`)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!city) {
+      return res.status(404).json({ success: false, message: 'City not found' });
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+    return res.json({ success: true, data: city });
+  } catch (err) {
+    logger.error('GET /public/cities/:slug error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// ── P11-5: Public investor report — token-gated, no auth ─────
+// GET /public/investor-report/:token
+// Token is a 7-day HMAC-signed string generated by POST /admin/investor/generate-link
+router.get('/public/investor-report/:token', async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const payload = verifyInvestorToken(token);
+
+    if (!payload) {
+      return res.status(401).json({
+        success: false,
+        error: 'This report link has expired or is invalid. Ask for a new link.',
+      });
+    }
+
+    const metrics = await getInvestorMetrics();
+
+    return res.json({
+      success: true,
+      data: metrics,
+      _meta: {
+        generated_at: new Date().toISOString(),
+        expires_at:   new Date(payload.exp).toISOString(),
+        note:         'TezzNirmaan — Confidential. Do not distribute.',
+      },
+    });
+  } catch (err) {
+    logger.error('GET /public/investor-report error', { error: err.message });
+    next(err);
+  }
+});
+
+// ── GET /public/banners — P12-3 ────────────────────────────────
+// Returns active, scheduled banners for a city (city-specific + global).
+// No auth required. 60s CDN cache.
+router.get('/public/banners', async (req, res, next) => {
+  try {
+    const citySlug = (req.query.city || '').toLowerCase();
+
+    // Resolve city_id from slug if provided
+    let cityId = null;
+    if (citySlug) {
+      const { data: cityRow } = await supabaseAdmin
+        .from('cities')
+        .select('id')
+        .ilike('name', citySlug)
+        .single();
+      cityId = cityRow?.id || null;
+    }
+
+    const now = new Date().toISOString();
+    let query = supabaseAdmin
+      .from('banners')
+      .select('id, title, subtitle, image_url, link_url, cta_text, bg_color, display_order')
+      .eq('is_active', true)
+      .or(`starts_at.is.null,starts_at.lte.${now}`)
+      .or(`ends_at.is.null,ends_at.gte.${now}`)
+      .order('display_order', { ascending: true })
+      .limit(5);
+
+    // City-scoped or global: city_id = null (global) OR city_id = current city
+    if (cityId) {
+      query = query.or(`city_id.is.null,city_id.eq.${cityId}`);
+    } else {
+      query = query.is('city_id', null);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=30');
+    res.json({ data: data || [] });
+  } catch (err) {
+    logger.error('GET /public/banners error', { error: err.message });
+    next(err);
+  }
+});
+
+// ── P12-5: Public product reviews ────────────────────────────
+// GET /public/products/:productId/reviews
+// Returns approved reviews + rating breakdown. No auth required.
+router.get('/public/products/:productId/reviews', async (req, res, next) => {
+  try {
+    const { productId } = req.params;
+    const limit  = Math.min(parseInt(req.query.limit)  || 10, 50);
+    const offset = parseInt(req.query.offset) || 0;
+    const sort   = req.query.sort === 'oldest' ? 'created_at.asc' : 'created_at.desc';
+
+    const { supabase } = await import('../config/supabase.js');
+
+    const { data: reviews, error, count } = await supabase
+      .from('product_reviews')
+      .select('id, rating, title, body, is_verified, created_at', { count: 'exact' })
+      .eq('product_id', productId)
+      .eq('is_approved', true)
+      .order(sort.split('.')[0], { ascending: sort.endsWith('asc') })
+      .range(offset, offset + limit - 1);
+
+    if (error) throw error;
+
+    // Rating breakdown
+    const { data: allRatings } = await supabase
+      .from('product_reviews')
+      .select('rating')
+      .eq('product_id', productId)
+      .eq('is_approved', true);
+
+    const breakdown = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    (allRatings || []).forEach(r => { if (breakdown[r.rating] !== undefined) breakdown[r.rating]++; });
+    const total    = allRatings?.length || 0;
+    const avg      = total ? (Object.entries(breakdown).reduce((s, [k, v]) => s + +k * v, 0) / total) : 0;
+
+    res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=60');
+    res.json({
+      data: {
+        reviews:   reviews || [],
+        total:     count   || 0,
+        avg_rating: parseFloat(avg.toFixed(2)),
+        breakdown,
+      },
+    });
+  } catch (err) {
+    logger.error('GET /public/products/:id/reviews error', { error: err.message });
+    next(err);
+  }
+});
+
+// ── P13-5: GET /public/flash-sales ─────────────────────────────
+// Returns currently active flash sales (active, not expired).
+// Query: ?city=patna (optional city filter)
+router.get('/public/flash-sales', async (req, res) => {
+  try {
+    const now      = new Date().toISOString();
+    const cityName = req.query.city || null;
+
+    let query = supabaseAdmin
+      .from('flash_sales')
+      .select('id, title, discount_pct, max_discount_paise, starts_at, ends_at, product_ids, category, is_active, usage_count, max_usage')
+      .eq('is_active', true)
+      .lte('starts_at', now)
+      .gte('ends_at', now)
+      .order('ends_at', { ascending: true });
+
+    if (cityName) {
+      const { data: city } = await supabaseAdmin
+        .from('cities').select('id').eq('name', cityName).maybeSingle();
+      if (city) {
+        query = query.or(`city_id.is.null,city_id.eq.${city.id}`);
+      }
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
+    return res.json({ success: true, data: { flash_sales: data || [] } });
+  } catch (err) {
+    logger.error('GET /public/flash-sales error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+
+// ── P15-6 + P18-2: Delivery fee calculator ───────────────────────────
+// GET /public/delivery-fee?city_id=&city_name=&lat=&lng=
+// P18-2: returns cod_enabled + cod_limit_paise for checkout validation
+// C2 fix: also accepts city_name (text) when city_id is not on the address
+router.get('/delivery-fee', async (req, res, next) => {
+  try {
+    const { supabaseAdmin } = await import('../config/supabase.js');
+    let { city_id, city_name, lat, lng } = req.query;
+
+    // C2: fallback — resolve city_id from city_name text if not provided
+    if (!city_id && city_name) {
+      const { data: cityRow } = await supabaseAdmin
+        .from('cities')
+        .select('id')
+        .ilike('name', city_name.trim())
+        .limit(1)
+        .single();
+      if (cityRow) city_id = cityRow.id;
+    }
+
+    if (!city_id) return res.json({ success: true, data: { fee_paise: 4900, label: '₹49', cod_enabled: true, cod_limit_paise: 100000, cod_limit_label: 'Up to ₹1,000' } });
+
+    // Find active zones for city (P18-2: include COD columns added in migration 071)
+    const { data: zones } = await supabaseAdmin
+      .from('delivery_zones')
+      .select('id, name, base_fee_paise, surge_multiplier, surge_start_hour, surge_end_hour, max_distance_km, polygon, cod_enabled, cod_limit_paise')
+      .eq('city_id', city_id)
+      .eq('is_active', true);
+
+    let fee         = 2000; // Default Rs.20
+    let codEnabled  = true;
+    let codLimit    = 100000; // Rs.1000 default
+
+    if (zones?.length) {
+      // Use first zone for now (later: match by polygon)
+      const zone = zones[0];
+      fee        = zone.base_fee_paise || 2000;
+      codEnabled = zone.cod_enabled !== false; // default true if null
+      codLimit   = zone.cod_limit_paise || 100000;
+
+      // Apply surge if in surge hours
+      const hour    = new Date().getHours();
+      const inSurge = hour >= (zone.surge_start_hour || 18) && hour < (zone.surge_end_hour || 21);
+      if (inSurge && zone.surge_multiplier > 1) {
+        fee = Math.round(fee * zone.surge_multiplier);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        fee_paise:       fee,
+        label:           `₹${Math.round(fee / 100)}`,
+        cod_enabled:     codEnabled,
+        cod_limit_paise: codLimit,
+        cod_limit_label: `₹${Math.round(codLimit / 100).toLocaleString('en-IN')}`,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+// ── P15-7: Live ETA for track page ───────────────────────────
+// GET /public/orders/track/:orderNumber/eta
+router.get('/orders/track/:orderNumber/eta', async (req, res, next) => {
+  try {
+    const { getOrderETA } = await import('../services/eta.service.js');
+    const eta = await getOrderETA(req.params.orderNumber);
+    if (!eta) return res.status(404).json({ success: false, message: 'Order not found' });
+    res.json({ success: true, data: eta });
+  } catch (err) { next(err); }
+});
+
+// ── P17-1: Recommendations ─────────────────────────────────────
+// GET /public/recommendations/personalized?city_id=&profile_id=
+router.get('/recommendations/personalized', async (req, res, next) => {
+  try {
+    const { city_id, profile_id } = req.query;
+    const { getPersonalizedRecs } = await import('../services/recommendations.service.js');
+    const recs = await getPersonalizedRecs(profile_id || null, city_id || null, 8);
+    res.json({ success: true, data: { recommendations: recs } });
+  } catch (err) { next(err); }
+});
+
+// GET /public/recommendations/similar/:inventoryId
+router.get('/recommendations/similar/:inventoryId', async (req, res, next) => {
+  try {
+    const { getSimilarProducts } = await import('../services/recommendations.service.js');
+    const recs = await getSimilarProducts(req.params.inventoryId, 6);
+    res.json({ success: true, data: { similar: recs } });
+  } catch (err) { next(err); }
+});
+
+// POST /public/recommendations/fbt  body: { product_ids: [] }
+router.post('/recommendations/fbt', async (req, res, next) => {
+  try {
+    const { product_ids = [] } = req.body;
+    const { getFrequentlyBoughtTogether } = await import('../services/recommendations.service.js');
+    const recs = await getFrequentlyBoughtTogether(product_ids, 4);
+    res.json({ success: true, data: { fbt: recs } });
+  } catch (err) { next(err); }
+});
+
+// ── Session K: GET /public/serviceability ─────────────────────────────────
+// Checks whether a lat/lng coordinate is within any active city's delivery
+// radius and has at least one active shop.
+//
+// Query params:
+//   lat  (required) — float latitude
+//   lng  (required) — float longitude
+//
+// Returns:
+//   serviceable: true/false
+//   city: { id, name, slug, delivery_radius_km } | null
+//   active_shop_count: number
+//   reason: human-readable string when serviceable=false
+//
+// Used by mobile app:
+//   1. When user grants location permission on HomeScreen
+//   2. When user picks/adds a delivery address at checkout
+//   3. City auto-select in CitySelectScreen
+//
+// No auth required. Rate-limited to 30/min/IP (reuses generalLimiter).
+// Cache-Control: 60s (city boundaries almost never change).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R    = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a    =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+router.get('/public/serviceability', async (req, res, next) => {
+  try {
+    const lat = parseFloat(req.query.lat);
+    const lng = parseFloat(req.query.lng);
+
+    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_COORDINATES', message: 'lat and lng query params are required and must be valid coordinates' },
+      });
+    }
+
+    // Fetch all active cities with their geo data
+    const { data: cities, error: cityErr } = await supabaseAdmin
+      .from('cities')
+      .select('id, name, slug, center_lat, center_lng, delivery_radius_km, is_active')
+      .eq('is_active', true)
+      .order('name');
+
+    if (cityErr) throw cityErr;
+
+    // Find the first active city whose delivery radius contains this point
+    let matchedCity = null;
+    let distKm = Infinity;
+
+    for (const city of (cities || [])) {
+      const d = haversineKm(lat, lng, city.center_lat, city.center_lng);
+      if (d <= (city.delivery_radius_km || 15) && d < distKm) {
+        matchedCity = city;
+        distKm      = d;
+      }
+    }
+
+    if (!matchedCity) {
+      // Check if there is a coming-soon city nearby (within 50km) for waitlist CTA
+      const { data: allCities } = await supabaseAdmin
+        .from('cities')
+        .select('id, name, slug, center_lat, center_lng, is_active');
+
+      const nearest = (allCities || [])
+        .map(c => ({ ...c, distKm: haversineKm(lat, lng, c.center_lat, c.center_lng) }))
+        .sort((a, b) => a.distKm - b.distKm)[0];
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          serviceable:      false,
+          city:             null,
+          active_shop_count: 0,
+          nearest_city:     nearest && nearest.distKm < 100
+            ? { id: nearest.id, name: nearest.name, slug: nearest.slug, dist_km: +nearest.distKm.toFixed(1), is_active: nearest.is_active }
+            : null,
+          reason: 'We do not deliver to this location yet.',
+        },
+      });
+    }
+
+    // Count active shops in that city
+    const { count: shopCount, error: shopErr } = await supabaseAdmin
+      .from('shops')
+      .select('id', { count: 'exact', head: true })
+      .eq('city_id', matchedCity.id)
+      .eq('status', 'active');
+
+    if (shopErr) throw shopErr;
+
+    const activeShops = shopCount ?? 0;
+
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    return res.status(200).json({
+      success: true,
+      data: {
+        serviceable:       activeShops > 0,
+        city: {
+          id:                  matchedCity.id,
+          name:                matchedCity.name,
+          slug:                matchedCity.slug,
+          delivery_radius_km:  matchedCity.delivery_radius_km,
+          dist_km:             +distKm.toFixed(1),
+        },
+        active_shop_count: activeShops,
+        reason: activeShops > 0 ? null : 'No active shops in your city yet.',
+      },
+    });
+  } catch (err) {
+    logger.error('GET /public/serviceability error', { error: err.message });
+    next(err);
   }
 });
 

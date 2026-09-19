@@ -397,3 +397,44 @@ export async function savePushToken(req, res, next) {
     next(err);
   }
 }
+
+
+/**
+ * PATCH /auth/change-password
+ * Requires: authenticate middleware + requireRole('shop_owner', 'shop_staff', 'rider')
+ * Body: { current_password, new_password }
+ *
+ * Allows staff users (shop_owner, shop_staff, rider) to change their own password.
+ * Uses the Supabase Admin SDK to update the password directly — no re-auth round-trip.
+ * current_password is accepted in the body for UX audit purposes but the actual
+ * enforcement relies on the authenticated session (the admin SDK bypasses Supabase
+ * RLS, so we trust the JWT already validated by authenticate middleware).
+ */
+export async function changePassword(req, res, next) {
+  try {
+    const { current_password, new_password } = req.body;
+
+    if (!current_password) throw new ValidationError('current_password is required');
+    if (!new_password)     throw new ValidationError('new_password is required');
+    if (new_password.length < 8) {
+      throw new ValidationError('new_password must be at least 8 characters long');
+    }
+    if (current_password === new_password) {
+      throw new ValidationError('new_password must differ from current_password');
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(req.user.id, {
+      password: new_password,
+    });
+
+    if (error) {
+      logger.error('changePassword: Supabase update failed', { userId: req.user.id, error: error.message });
+      throw new AppError('Failed to update password: ' + error.message, 500);
+    }
+
+    logger.info('Password changed', { userId: req.user.id, role: req.user.role });
+    res.json({ success: true, data: { message: 'Password changed successfully' } });
+  } catch (err) {
+    next(err);
+  }
+}

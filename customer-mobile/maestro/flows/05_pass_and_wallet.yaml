@@ -1,0 +1,46 @@
+# ──────────────────────────────────────────────────────────────
+# Flow 05: Pass and Wallet screens
+#
+# Pre-conditions:
+#   • User logged in
+#   • No active pass (plan picker view shown, not the active card view)
+#
+# Verified against source:
+#   • TabNavigator   → Pass tab label: "Pass"
+#   • TabNavigator   → Wallet tab label: "Wallet"
+#   • PassStack      → navigation header: "TezzNirmaan Pass"
+#   • WalletStack    → navigation header: "My Wallet"
+#   • PassScreen.jsx → header text: "🎫 TezzNirmaan Pass"
+#                   → inactive view: "Choose your pass"
+#   • PassScreen.jsx → plan names rendered from API (e.g., "Weekly Pass", "Monthly Pass")
+#     NOTE: plan names come from the DB. If different, update assertions to match.
+#   • WalletScreen.jsx → balance card shown (no specific text assertion needed
+#                        because the amount is dynamic; assert heading "My Wallet")
+# ──────────────────────────────────────────────────────────────
+
+appId: in.tezznirmaan.app
+---
+# 1. Launch (preserve auth state)
+- launchApp
+
+# 2. Tap the Pass bottom tab
+- tapOn: "Pass"
+
+# 3. Navigation header should show the stack title
+- assertVisible: "TezzNirmaan Pass"  # navigation header (PassStack screen option)
+
+# 4. Screen header text rendered by PassScreen
+- assertVisible: "🎫 TezzNirmaan Pass"
+
+# 5. Plan picker section (user has no active pass)
+- assertVisible: "Choose your pass"
+
+# 6. Plan cards — names come from DB (default seeds: "Weekly Pass", "Monthly Pass")
+#    If you renamed plans in the seed, update these assertions.
+- assertVisible: "Why get a Pass?"
+
+# 7. Now navigate to Wallet tab
+- tapOn: "Wallet"
+
+# 8. Navigation header
+- assertVisible: "My Wallet"   # WalletStack screen title

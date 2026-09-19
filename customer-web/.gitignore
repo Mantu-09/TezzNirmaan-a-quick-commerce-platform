@@ -1,0 +1,9 @@
+# TezzNirmaan Dashboard .gitignore
+node_modules/
+.next/
+.env.local
+.env.*.local
+!.env.example
+dist/
+.DS_Store
+*.log

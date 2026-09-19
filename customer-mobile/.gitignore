@@ -1,0 +1,48 @@
+# TezzNirmaan Mobile App — .gitignore
+
+# Dependencies
+node_modules/
+.expo/
+
+# Environment — NEVER commit
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build outputs
+dist/
+build/
+ios/
+android/
+
+# EAS
+.eas/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Metro bundler cache
+.metro-health-check*
+
+# P1-A: FCM / APNs credentials — NEVER commit these
+# Download from Firebase Console / Apple Developer Portal
+# and place them here manually before building.
+google-services.json
+GoogleService-Info.plist
+
+# P9-2: Google Play service account key — NEVER commit
+# Download from Google Play Console → Setup → API access
+# Place at: mobile/google-play-key.json
+google-play-key.json
+google-play-service-account.json
+*-service-account*.json

@@ -475,3 +475,56 @@ export async function cleanupTestData(userIds = [], shopIds = []) {
     }
   }
 }
+/**
+ * Creates a test platform_admin account.
+ * Returns { adminId, adminToken }
+ */
+export async function createTestAdmin(suffix = nextSuffix()) {
+  const phone    = makePhone(suffix, 6); // +916XXXXXXXXX — distinct from customer/shop/rider
+  const email    = `testadmin_${suffix}@tezznirmaan.internal`;
+  const password = `TestPass123!`;
+
+  await cleanupStaleUser(email);
+  await testAdmin.from('profiles').delete().eq('phone', phone);
+
+  const { data: authData, error: authErr } = await testAdmin.auth.admin.createUser({
+    email, password,
+    email_confirm: true,
+    app_metadata:  { role: 'platform_admin' },
+    user_metadata: { full_name: `Test Admin ${suffix}`, phone },
+  });
+  if (authErr) throw new Error(`createTestAdmin auth: ${authErr.message}`);
+
+  const adminId = authData.user.id;
+  const { error: profErr } = await testAdmin.from('profiles').upsert({
+    id: adminId, phone, full_name: `Test Admin ${suffix}`,
+    role: 'platform_admin', updated_at: new Date().toISOString(),
+  }, { onConflict: 'id' });
+  if (profErr) throw new Error(`createTestAdmin profile: ${profErr.message}`);
+
+  const adminToken = await getAuthToken(email, password);
+  return { adminId, adminToken };
+}
+
+/**
+ * Creates a delivery address for a test customer.
+ * Returns the address id.
+ */
+export async function createTestAddress(userId, overrides = {}) {
+  const { data, error } = await testAdmin.from('addresses').insert({
+    user_id:       userId,
+    full_name:     'Test User',
+    phone:         '+919000000001',
+    label:         'Home',
+    address_line1: '123 Test Street',
+    city:          'Patna',
+    state:         'Bihar',
+    pincode:       '800001',
+    lat:           25.5941,
+    lng:           85.1376,
+    is_default:    true,
+    ...overrides,
+  }).select('id').single();
+  if (error) throw new Error(`createTestAddress: ${error.message}`);
+  return data.id;
+}

@@ -1,19 +1,19 @@
-// ────────────────────────────────────────────────────────────
-// City Notification Service — P4-4A + P5-6
+﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// City Notification Service â€” P4-4A + P5-6
 //
 // Two responsibilities:
 //
-//   1. notifyCityActivation(city) — internal Slack/webhook alert
+//   1. notifyCityActivation(city) â€” internal Slack/webhook alert
 //      when an admin activates a city via the dashboard.
 //
-//   2. notifyWaitlist(cityId) — SMS blast to all customers who
+//   2. notifyWaitlist(cityId) â€” SMS blast to all customers who
 //      signed up on the "Coming Soon" waitlist for this city.
 //      Sends one SMS per signup then marks them notified so
 //      re-running is safe (idempotent).
 //
 // To enable Slack notifications:
 //   CITY_ACTIVATION_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import logger from '../utils/logger.js';
 import { supabaseAdmin } from '../config/supabase.js';
 import * as smsService from './sms.service.js';
@@ -22,23 +22,23 @@ const WEBHOOK_URL = process.env.CITY_ACTIVATION_WEBHOOK_URL;
 
 /**
  * Notify internal channels that a city has been activated.
- * Fire-and-forget — errors are swallowed so they never block
+ * Fire-and-forget â€” errors are swallowed so they never block
  * the HTTP response that triggered the activation.
  *
  * @param {{ id: string, name: string, state: string, launch_date: string }} city
  */
 export async function notifyCityActivation(city) {
   const payload = {
-    text: `🚀 *TezzNirmaan is now live in ${city.name}, ${city.state}!*`,
+    text: `ðŸš€ *TezzNirmaan is now live in ${city.name}, ${city.state}!*`,
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
           text: [
-            `🏙️ *City Activated:* ${city.name}, ${city.state}`,
-            `📅 *Launch Date:* ${city.launch_date || new Date().toISOString().split('T')[0]}`,
-            `🆔 *City ID:* \`${city.id}\``,
+            `ðŸ™ï¸ *City Activated:* ${city.name}, ${city.state}`,
+            `ðŸ“… *Launch Date:* ${city.launch_date || new Date().toISOString().split('T')[0]}`,
+            `ðŸ†” *City ID:* \`${city.id}\``,
           ].join('\n'),
         },
       },
@@ -51,7 +51,7 @@ export async function notifyCityActivation(city) {
   );
 
   if (!WEBHOOK_URL) {
-    logger.warn('city-notification: CITY_ACTIVATION_WEBHOOK_URL not set — notification skipped');
+    logger.warn('city-notification: CITY_ACTIVATION_WEBHOOK_URL not set â€” notification skipped');
     return;
   }
 
@@ -71,7 +71,7 @@ export async function notifyCityActivation(city) {
       logger.info({ cityId: city.id }, 'city-notification: webhook delivered');
     }
   } catch (err) {
-    // Non-fatal — a webhook failure must never break city activation
+    // Non-fatal â€” a webhook failure must never break city activation
     logger.error({ err, cityId: city.id }, 'city-notification: webhook request failed');
   }
 }
@@ -80,18 +80,18 @@ export async function notifyCityActivation(city) {
  * P5-6: SMS blast to every un-notified waitlist signup for a city.
  *
  * Design decisions:
- *   - Reads only WHERE notified = false (idempotent — safe to re-run)
+ *   - Reads only WHERE notified = false (idempotent â€” safe to re-run)
  *   - Sends SMS one at a time (sequential) to avoid SMS provider
  *     rate-limit bursts. For >500 signups, consider batching in a
  *     background job instead.
  *   - Marks each row notified = true immediately after the SMS send
  *     so partial failures don't re-send to already-notified customers.
- *   - Never throws — errors are logged, activation is NOT blocked.
+ *   - Never throws â€” errors are logged, activation is NOT blocked.
  *
  * Requires: migration 040_muzaffarpur_activation.sql (adds `notified` column)
  *
- * @param {string} cityId   — UUID of the newly activated city
- * @param {string} cityName — Human-readable name for the SMS body
+ * @param {string} cityId   â€” UUID of the newly activated city
+ * @param {string} cityName â€” Human-readable name for the SMS body
  */
 export async function notifyWaitlist(cityId, cityName) {
   logger.info({ cityId, cityName }, 'city-notification: starting waitlist SMS blast');
@@ -110,7 +110,7 @@ export async function notifyWaitlist(cityId, cityName) {
   }
 
   if (!waitlist || waitlist.length === 0) {
-    logger.info({ cityId, cityName }, 'city-notification: no un-notified waitlist signups — nothing to send');
+    logger.info({ cityId, cityName }, 'city-notification: no un-notified waitlist signups â€” nothing to send');
     return;
   }
 
@@ -121,12 +121,12 @@ export async function notifyWaitlist(cityId, cityName) {
 
   for (const person of waitlist) {
     const smsBody =
-      `🎉 TezzNirmaan is now live in ${cityName}! ` +
-      `Order hardware, paint, tiles & more — delivered in 60-90 minutes. ` +
+      `ðŸŽ‰ TezzNirmaan is now live in ${cityName}! ` +
+      `Order hardware, paint, tiles & more â€” delivered in 60-90 minutes. ` +
       `Download: https://tezznirmaan.in`;
 
     try {
-      await smsService.send(person.phone, smsBody);
+      await smsService.sendSMS(person.phone, smsBody);
 
       // Mark as notified immediately after successful send
       await supabaseAdmin
@@ -136,7 +136,7 @@ export async function notifyWaitlist(cityId, cityName) {
 
       sent++;
     } catch (smsErr) {
-      // Log and continue — don't let one bad phone number stop the rest
+      // Log and continue â€” don't let one bad phone number stop the rest
       logger.warn(
         { cityId, phone: person.phone.slice(0, 6) + '****', error: smsErr.message },
         'city-notification: SMS failed for one waitlist signup (skipping)'
@@ -150,3 +150,4 @@ export async function notifyWaitlist(cityId, cityName) {
     'city-notification: waitlist SMS blast complete'
   );
 }
+
