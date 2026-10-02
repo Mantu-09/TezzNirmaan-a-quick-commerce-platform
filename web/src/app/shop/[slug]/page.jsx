@@ -1,278 +1,210 @@
 // ─────────────────────────────────────────────────────────────
-// web/src/app/shop/[slug]/page.jsx — Shop page (ISR)
-// P9-5: TezzNirmaan web storefront
+// web/src/app/shop/[slug]/page.jsx — Shop + Category Listing
+// TezzNirmaan web storefront
 //
-// URL:    /shop/:slug
-// Data:   getShopBySlug(slug) + getShopProducts(slug)
-// Cache:  ISR — revalidate: 60 seconds
-// SEO:    generateMetadata + JSON-LD for LocalBusiness
+// Fetches products for a category slug from the public API.
+// Supports search, sort, and pagination.
+// Server component with generateMetadata for SEO.
 // ─────────────────────────────────────────────────────────────
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import Link         from 'next/link';
-import { getShopBySlug, getShopProducts, getAllShopSlugs } from '../../../lib/api';
-import ProductCard from '../../../components/ProductCard';
 
-export const revalidate = 60; // ISR: revalidate every 60 seconds
+const API_URL = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL || '';
 
-// ── generateStaticParams ─────────────────────────────────────
-// Pre-render all active shop slugs at build time.
-// New shops added after build are generated on-demand (ISR).
-export async function generateStaticParams() {
-  try {
-    const slugs = await getAllShopSlugs();
-    return slugs.map(slug => ({ slug }));
-  } catch (_) {
-    return []; // On error, render on-demand only
-  }
-}
+const CATEGORY_META = {
+  'cement-concrete': { name: 'Cement & Concrete',  icon: '🏗️', desc: 'Portland cement, ready-mix concrete, construction chemicals and additives.' },
+  paints:            { name: 'Paints & Primers',    icon: '🎨', desc: 'Interior, exterior, enamel, wood polish and waterproofing paints.' },
+  tiles:             { name: 'Tiles & Flooring',    icon: '🟫', desc: 'Vitrified tiles, ceramic, mosaic and anti-skid flooring solutions.' },
+  plumbing:          { name: 'Plumbing',             icon: '🔧', desc: 'CPVC pipes, fittings, valves, taps, water tanks and drainage.' },
+  electrical:        { name: 'Electrical',           icon: '⚡', desc: 'Wires, switchgear, MCBs, LED lights, fans and fixtures.' },
+  hardware:          { name: 'Hardware',             icon: '🔩', desc: 'Fasteners, tools, locks, hinges and construction hardware.' },
+  aggregates:        { name: 'Sand & Aggregates',    icon: '🪨', desc: 'River sand, crusher sand, aggregates and stone chips.' },
+  wood:              { name: 'Wood & Plywood',       icon: '🪵', desc: 'Plywood, MDF, hardwood, veneer and timber sections.' },
+};
 
-// ── SEO metadata ──────────────────────────────────────────────
 export async function generateMetadata({ params }) {
-  try {
-    const shop = await getShopBySlug(params.slug);
-    if (!shop) return { title: 'Shop Not Found' };
+  const slug = (await params).slug;
+  const meta = CATEGORY_META[slug];
+  if (!meta) return { title: 'TezzNirmaan' };
+  return {
+    title: `${meta.name} — TezzNirmaan Patna`,
+    description: meta.desc,
+    alternates: { canonical: `https://tezznirmaan.in/shop/${slug}` },
+  };
+}
 
-    return {
-      title:       `${shop.name} — Order Online in ${shop.city} | TezzNirmaan`,
-      description: shop.description
-        || `Order from ${shop.name} in ${shop.city}. Fast delivery by TezzNirmaan.`,
-      openGraph: {
-        title:  shop.name,
-        images: shop.logo_url ? [{ url: shop.logo_url }] : [],
-      },
-      alternates: {
-        canonical: `https://tezznirmaan.in/shop/${shop.slug}`,
-      },
-    };
-  } catch (_) {
-    return { title: 'Shop | TezzNirmaan' };
+async function getProducts(slug, { search, sort, page } = {}) {
+  try {
+    const qs = new URLSearchParams({ category: slug, page: page || 1, limit: 24 });
+    if (search) qs.set('search', search);
+    if (sort)   qs.set('sort', sort);
+    const res = await fetch(`${API_URL}/api/v1/public/products?${qs.toString()}`, {
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) return { products: [], total: 0 };
+    const data = await res.json();
+    return { products: data.data || data.products || [], total: data.pagination?.total || 0 };
+  } catch {
+    return { products: [], total: 0 };
   }
 }
 
-// ── Page component ────────────────────────────────────────────
-export default async function ShopPage({ params, searchParams }) {
-  const category  = searchParams?.category || null;
-  const page      = parseInt(searchParams?.page || '1', 10);
+export default async function CategoryPage({ params, searchParams }) {
+  const slug = (await params).slug;
+  const sp   = await searchParams;
+  const meta = CATEGORY_META[slug];
 
-  // Parallel fetch — shop metadata + products
-  let shop, productsData;
-  try {
-    [shop, productsData] = await Promise.all([
-      getShopBySlug(params.slug),
-      getShopProducts(params.slug, { category, page }),
-    ]);
-  } catch (_) {
-    notFound();
-  }
+  if (!meta) notFound();
 
-  if (!shop) notFound();
+  const { products, total } = await getProducts(slug, {
+    search: sp.q,
+    sort:   sp.sort,
+    page:   sp.page,
+  });
 
-  const { products = [], pagination } = productsData || {};
+  const currentPage = parseInt(sp.page || '1');
+  const totalPages  = Math.ceil(total / 24);
 
-  // Rating stars display
-  const ratingStars = (r) => {
-    const full  = Math.floor(r || 0);
-    const stars = '★'.repeat(full) + '☆'.repeat(5 - full);
-    return stars;
-  };
+  const SORT_OPTIONS = [
+    { value: '',            label: 'Relevance'     },
+    { value: 'price_asc',  label: 'Price: Low–High' },
+    { value: 'price_desc', label: 'Price: High–Low' },
+    { value: 'newest',     label: 'Newest First'  },
+  ];
 
   return (
-    <>
-      {/* JSON-LD: LocalBusiness */}
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
-            '@context': 'https://schema.org',
-            '@type':    'LocalBusiness',
-            name:       shop.name,
-            description: shop.description,
-            image:       shop.logo_url,
-            url:         `https://tezznirmaan.in/shop/${shop.slug}`,
-            address: {
-              '@type':         'PostalAddress',
-              streetAddress:   shop.address,
-              addressLocality: shop.city,
-              addressCountry:  'IN',
-            },
-            aggregateRating: shop.rating ? {
-              '@type':       'AggregateRating',
-              ratingValue:   shop.rating,
-              reviewCount:   shop.total_reviews || 0,
-              bestRating:    5,
-            } : undefined,
-          }),
-        }}
-      />
+    <main style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 16px' }}>
+      {/* Breadcrumb */}
+      <nav style={{ fontSize: 13, color: '#6b7280', marginBottom: 20 }}>
+        <Link href="/" style={{ color: '#f97316', textDecoration: 'none' }}>Home</Link>
+        <span style={{ margin: '0 8px' }}>/</span>
+        <span style={{ color: '#111827', fontWeight: 600 }}>{meta.name}</span>
+      </nav>
 
-      {/* ── Shop hero ──────────────────────────────── */}
-      <div style={{
-        backgroundColor: 'var(--surface)',
-        borderBottom: '1px solid var(--border)',
-        padding: 'var(--s6) 0',
-      }}>
-        <div className="container">
-          <nav aria-label="Breadcrumb" style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 16 }}>
-            <Link href="/" style={{ color: 'var(--text-3)' }}>Home</Link>
-            <span style={{ margin: '0 6px' }}>/</span>
-            <span>{shop.name}</span>
-          </nav>
-
-          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            {/* Logo */}
-            <div style={{
-              width: 80, height: 80, borderRadius: 'var(--r-lg)',
-              backgroundColor: 'var(--surface-2)',
-              border: '1px solid var(--border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 32, flexShrink: 0,
-              overflow: 'hidden',
-            }}>
-              {shop.logo_url
-                ? <img src={shop.logo_url} alt={shop.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                : '🏪'
-              }
-            </div>
-
-            <div style={{ flex: 1 }}>
-              <h1 style={{ fontSize: 'clamp(20px, 3vw, 28px)', fontWeight: 800, color: 'var(--text)', marginBottom: 4 }}>
-                {shop.name}
-              </h1>
-
-              {/* Rating */}
-              {shop.rating && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span style={{ color: '#f59e0b', fontSize: 14 }}>{ratingStars(shop.rating)}</span>
-                  <span style={{ fontSize: 13, color: 'var(--text-2)', fontWeight: 600 }}>{shop.rating}</span>
-                  {shop.total_reviews > 0 && (
-                    <span style={{ fontSize: 12, color: 'var(--text-3)' }}>({shop.total_reviews} reviews)</span>
-                  )}
-                </div>
-              )}
-
-              {/* Address */}
-              <p style={{ fontSize: 13, color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                📍 {shop.address || shop.city}
-              </p>
-
-              {/* Hours */}
-              {shop.opening_time && (
-                <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>
-                  🕐 {shop.opening_time} – {shop.closing_time}
-                </p>
-              )}
-            </div>
-
-            {/* Download CTA */}
-            <a
-              href="https://play.google.com/store/apps/details?id=in.tezznirmaan.app"
-              className="btn btn-primary"
-              style={{ flexShrink: 0 }}
-              target="_blank" rel="noopener noreferrer"
-            >
-              Order in App
-            </a>
-          </div>
-
-          {/* Category filter pills */}
-          {shop.categories?.length > 0 && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 20, flexWrap: 'wrap' }}>
-              <Link
-                href={`/shop/${shop.slug}`}
-                style={{
-                  fontSize: 13, fontWeight: 600,
-                  padding: '6px 14px', borderRadius: 'var(--r-full)',
-                  backgroundColor: !category ? 'var(--primary)' : 'var(--surface-2)',
-                  color: !category ? '#fff' : 'var(--text-2)',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                All
-              </Link>
-              {shop.categories.map(cat => (
-                <Link
-                  key={cat}
-                  href={`/shop/${shop.slug}?category=${encodeURIComponent(cat)}`}
-                  style={{
-                    fontSize: 13, fontWeight: 600,
-                    padding: '6px 14px', borderRadius: 'var(--r-full)',
-                    backgroundColor: category === cat ? 'var(--primary)' : 'var(--surface-2)',
-                    color: category === cat ? '#fff' : 'var(--text-2)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {cat}
-                </Link>
-              ))}
-            </div>
-          )}
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>
+        <span style={{ fontSize: 40 }}>{meta.icon}</span>
+        <div>
+          <h1 style={{ fontSize: 26, fontWeight: 800, color: '#111827', margin: '0 0 4px' }}>{meta.name}</h1>
+          <p style={{ fontSize: 14, color: '#6b7280', margin: 0 }}>{meta.desc}</p>
         </div>
       </div>
 
-      {/* ── Product grid ──────────────────────────── */}
-      <section style={{ padding: 'var(--s8) 0 var(--s12)' }}>
-        <div className="container">
-          {/* Result count */}
-          <p style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 20 }}>
-            {pagination?.total ?? 0} products
-            {category ? ` in "${category}"` : ''}
-          </p>
+      {/* Search + Sort row */}
+      <form method="get" style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
+        <input
+          name="q"
+          defaultValue={sp.q || ''}
+          placeholder={`Search in ${meta.name}…`}
+          style={{ flex: '1 1 220px', padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 10, fontSize: 14, outline: 'none' }}
+        />
+        <select
+          name="sort"
+          defaultValue={sp.sort || ''}
+          style={{ padding: '10px 14px', border: '1.5px solid #e2e8f0', borderRadius: 10, fontSize: 14, background: '#fff' }}
+        >
+          {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <button type="submit" style={{ padding: '10px 20px', background: '#f97316', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 14, color: '#fff', cursor: 'pointer' }}>
+          Search
+        </button>
+      </form>
 
-          {products.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--text-3)' }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>📦</div>
-              <p style={{ fontSize: 16, fontWeight: 600 }}>No products found</p>
-              <p style={{ fontSize: 14, marginTop: 4 }}>
-                {category ? 'Try a different category' : 'This shop has no products yet'}
-              </p>
-            </div>
-          ) : (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-              gap: 16,
-            }}>
-              {products.map(product => (
-                <ProductCard
-                  key={product.inventory_id}
-                  product={product}
-                  shopSlug={shop.slug}
-                />
-              ))}
-            </div>
+      {/* Result count */}
+      {sp.q && (
+        <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+          {total} results for "<strong>{sp.q}</strong>"
+        </p>
+      )}
+
+      {/* Product grid */}
+      {products.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#9ca3af' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>📦</div>
+          <div style={{ fontWeight: 700, fontSize: 18, color: '#6b7280' }}>No products found</div>
+          <p style={{ fontSize: 14 }}>Try a different search term or browse other categories.</p>
+          <Link href="/" style={{ display: 'inline-block', marginTop: 16, padding: '10px 24px', background: '#f97316', color: '#fff', borderRadius: 10, fontWeight: 700, textDecoration: 'none' }}>
+            Browse All
+          </Link>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+          {products.map(p => (
+            <Link
+              key={p.id}
+              href={`/shop/${slug}/${p.id}`}
+              style={{ display: 'block', background: '#fff', borderRadius: 12, border: '1px solid #f3f4f6', overflow: 'hidden', textDecoration: 'none', transition: 'box-shadow 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}
+            >
+              {/* Product image */}
+              <div style={{ aspectRatio: '4/3', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>
+                {p.image_url ? (
+                  <img src={p.image_url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <span>{meta.icon}</span>
+                )}
+              </div>
+              <div style={{ padding: '12px 14px' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 4, lineHeight: 1.4, WebkitLineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {p.name}
+                </div>
+                {p.brand && <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 6 }}>{p.brand}</div>}
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontSize: 16, fontWeight: 800, color: '#f97316' }}>
+                    ₹{Math.floor((p.price_paise || 0) / 100)}
+                  </span>
+                  {p.original_price_paise && p.original_price_paise > p.price_paise && (
+                    <span style={{ fontSize: 11, color: '#9ca3af', textDecoration: 'line-through' }}>
+                      ₹{Math.floor(p.original_price_paise / 100)}
+                    </span>
+                  )}
+                </div>
+                {p.unit && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>per {p.unit}</div>}
+                <div style={{ marginTop: 10, padding: '8px', background: '#fff7ed', borderRadius: 8, textAlign: 'center', color: '#f97316', fontWeight: 700, fontSize: 12 }}>
+                  Order via App →
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 32 }}>
+          {currentPage > 1 && (
+            <Link href={`/shop/${slug}?${new URLSearchParams({ ...sp, page: currentPage - 1 }).toString()}`}
+              style={{ padding: '8px 16px', background: '#f1f5f9', borderRadius: 8, fontWeight: 600, fontSize: 13, color: '#374151', textDecoration: 'none' }}>
+              ← Prev
+            </Link>
           )}
-
-          {/* Pagination */}
-          {pagination && (pagination.has_prev || pagination.has_next) && (
-            <div style={{
-              display: 'flex', justifyContent: 'center',
-              gap: 12, marginTop: 40,
-            }}>
-              {pagination.has_prev && (
-                <Link
-                  href={`/shop/${shop.slug}?${category ? `category=${encodeURIComponent(category)}&` : ''}page=${page - 1}`}
-                  className="btn btn-outline"
-                  style={{ fontSize: 14 }}
-                >
-                  ← Previous
-                </Link>
-              )}
-              <span style={{ display: 'flex', alignItems: 'center', fontSize: 13, color: 'var(--text-3)' }}>
-                Page {pagination.page} of {pagination.total_pages}
-              </span>
-              {pagination.has_next && (
-                <Link
-                  href={`/shop/${shop.slug}?${category ? `category=${encodeURIComponent(category)}&` : ''}page=${page + 1}`}
-                  className="btn btn-outline"
-                  style={{ fontSize: 14 }}
-                >
-                  Next →
-                </Link>
-              )}
-            </div>
+          <span style={{ padding: '8px 16px', fontSize: 13, color: '#6b7280' }}>
+            Page {currentPage} of {totalPages}
+          </span>
+          {currentPage < totalPages && (
+            <Link href={`/shop/${slug}?${new URLSearchParams({ ...sp, page: currentPage + 1 }).toString()}`}
+              style={{ padding: '8px 16px', background: '#f97316', borderRadius: 8, fontWeight: 700, fontSize: 13, color: '#fff', textDecoration: 'none' }}>
+              Next →
+            </Link>
           )}
         </div>
-      </section>
-    </>
+      )}
+
+      {/* App CTA */}
+      <div style={{ marginTop: 40, background: 'linear-gradient(135deg, #f97316, #ea580c)', borderRadius: 16, padding: '28px 24px', textAlign: 'center', color: '#fff' }}>
+        <div style={{ fontSize: 32, marginBottom: 8 }}>📱</div>
+        <h2 style={{ fontSize: 20, fontWeight: 800, margin: '0 0 8px' }}>Order Faster on the App</h2>
+        <p style={{ fontSize: 14, opacity: 0.9, margin: '0 0 18px' }}>Real-time tracking, faster checkout, exclusive app discounts.</p>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <a href="https://play.google.com/store/apps/details?id=com.tezznirmaan" target="_blank" rel="noreferrer"
+            style={{ padding: '10px 20px', background: '#fff', color: '#f97316', borderRadius: 10, fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>
+            ▶ Google Play
+          </a>
+          <a href="https://apps.apple.com/app/tezznirmaan" target="_blank" rel="noreferrer"
+            style={{ padding: '10px 20px', background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1.5px solid rgba(255,255,255,0.5)', borderRadius: 10, fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>
+             App Store
+          </a>
+        </div>
+      </div>
+    </main>
   );
 }

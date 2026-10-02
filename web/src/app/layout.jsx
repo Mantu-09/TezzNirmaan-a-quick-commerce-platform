@@ -82,16 +82,24 @@ export default function RootLayout({ children }) {
               <span style={{ color: 'var(--text-3)', fontSize: 11 }}>(Pilot city)</span>
             </div>
 
-            {/* Download CTA — desktop */}
-            <a
-              href="https://play.google.com/store/apps/details?id=in.tezznirmaan.app"
-              className="btn btn-primary"
-              style={{ fontSize: 13, padding: '8px 16px' }}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Download App
-            </a>
+            {/* Nav links */}
+            <nav style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <Link href="/search" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-2)', textDecoration: 'none' }}>
+                🔍 Search
+              </Link>
+              <Link href="/sell" style={{ fontSize: 13, fontWeight: 600, color: '#f97316', textDecoration: 'none' }}>
+                Sell with Us
+              </Link>
+              <a
+                href="https://play.google.com/store/apps/details?id=in.tezznirmaan.app"
+                className="btn btn-primary"
+                style={{ fontSize: 13, padding: '8px 16px' }}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Download App
+              </a>
+            </nav>
           </div>
         </header>
 
@@ -137,7 +145,8 @@ export default function RootLayout({ children }) {
                 <nav aria-label="Footer shop links">
                   <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <li><a href="https://dashboard.tezznirmaan.in" style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>Shop Dashboard</a></li>
-                    <li><Link href="/list-your-shop" style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>List Your Shop</Link></li>
+                    <li><Link href="/sell" style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>Sell on TezzNirmaan</Link></li>
+                    <li><Link href="/search" style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>Search Products</Link></li>
                   </ul>
                 </nav>
               </div>
