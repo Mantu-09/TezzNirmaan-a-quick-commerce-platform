@@ -9,9 +9,9 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --sf-primary:     #E8521A;
-  --sf-primary-dk:  #c73e0e;
-  --sf-primary-lt:  #fff1ec;
+  --sf-primary:     #E8740C;
+  --sf-primary-dk:  #c96200;
+  --sf-primary-lt:  #fff3ec;
   --sf-text:        #111827;
   --sf-text-2:      #6b7280;
   --sf-text-3:      #9ca3af;
@@ -109,6 +109,16 @@ body.sf-body {
   transform: translateY(-50%);
   color: var(--sf-text-3);
   pointer-events: none;
+}
+
+/* ── Mobile header responsiveness ───────────────────────────── */
+@media (max-width: 640px) {
+  /* Hide city chip on mobile to save horizontal space */
+  .sf-header-inner > div[style*="minWidth: 110"] { display: none; }
+}
+@media (max-width: 480px) {
+  /* Compact the header right-side actions on very small screens */
+  .sf-header-actions { gap: 4px; }
 }
 
 .sf-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
@@ -454,6 +464,12 @@ body.sf-body {
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+.sf-product-unit {
+  font-size:  0.7rem;
+  color:      var(--sf-text-2);
+  margin-bottom: 6px;
+  font-weight: 500;
 }
 .sf-product-delivery-badge {
   display:    inline-flex;
@@ -812,6 +828,7 @@ body.sf-body {
 }
 .sf-submit-btn:hover:not(:disabled) { background: var(--sf-primary-dk); }
 .sf-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.sf-submit-btn:focus-visible { outline: 3px solid rgba(232,82,26,0.4); outline-offset: 2px; }
 
 .sf-auth-hint { font-size: 0.75rem; color: var(--sf-text-3); text-align: center; margin-top: 16px; line-height: 1.5; }
 .sf-back-link { font-size: 0.8125rem; color: var(--sf-primary); cursor: pointer; background: none; border: none; font-family: var(--sf-font); text-decoration: underline; }

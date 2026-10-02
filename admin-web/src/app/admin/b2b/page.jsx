@@ -1,7 +1,9 @@
 ﻿// admin/b2b/page.jsx — P15-1 + P15-3 Enhanced
 // Tabs: Contractors (with credit management) | Quote Requests
 'use client';
-import { useEffect, useState } from 'react';
+
+import { api } from '../../../lib/api';
+import Cookies from 'js-cookie';import { useEffect, useState } from 'react';
 
 const fmt = p => p != null ? `₹${Math.round(p / 100).toLocaleString('en-IN')}` : '—';
 const STATUS_COLOR = { pending: '#f97316', quoted: '#3b82f6', accepted: '#16a34a', rejected: '#ef4444', expired: '#9ca3af' };
@@ -18,7 +20,7 @@ function ContractorsTab() {
   useEffect(() => { loadContractors(); }, []);
 
   async function loadContractors() {
-    const r = await fetch('/api/backend/admin/b2b/contractors', { credentials: 'include' });
+    const r = await api.get('/admin/b2b/contractors');
     const d = await r.json();
     setContractors(d.data?.contractors || []);
   }
@@ -32,7 +34,7 @@ function ContractorsTab() {
   async function saveCredit() {
     setSaving(true);
     const r = await fetch(`/api/backend/admin/b2b/contractors/${selected.id}/credit`, {
-      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` },
       body: JSON.stringify({ ...creditForm, credit_limit_paise: creditForm.credit_limit_paise * 100 }),
     });
     const d = await r.json();
@@ -44,7 +46,7 @@ function ContractorsTab() {
   async function recordPayment() {
     if (!payForm) return;
     const r = await fetch(`/api/backend/admin/b2b/contractors/${selected.id}/record-payment`, {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` },
       body: JSON.stringify({ amount_paise: payForm * 100 }),
     });
     const d = await r.json();
@@ -147,7 +149,7 @@ function QuotesTab() {
 
   async function loadQuotes() {
     setLoading(true);
-    const r = await fetch('/api/backend/admin/b2b/quotes?status=pending', { credentials: 'include' });
+    const r = await api.get('/admin/b2b/quotes?status=pending');
     const d = await r.json();
     setQuotes(d.data?.quotes || []);
     setLoading(false);
@@ -156,7 +158,7 @@ function QuotesTab() {
   async function action(id, act) {
     const form = forms[id] || {};
     const r = await fetch(`/api/backend/admin/b2b/quotes/${id}`, {
-      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` },
       body: JSON.stringify({ action: act, quoted_total_paise: (form.total || 0) * 100, discount_pct: form.discount || 0, rejection_reason: form.reason }),
     });
     const d = await r.json();

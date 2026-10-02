@@ -86,9 +86,13 @@ export default function AdminLayout({ children }) {
   const [failedJobCount,   setFailedJobCount]   = useState(0);
   const [activeDeliveries, setActiveDeliveries] = useState(0);
   const [pendingPayouts,   setPendingPayouts]   = useState(0);
+  const [sidebarOpen,      setSidebarOpen]      = useState(false);
 
   // Fix white page: wait for Zustand to rehydrate from localStorage
   useEffect(() => { setHydrated(true); }, []);
+
+  // Close sidebar when route changes (mobile nav)
+  useEffect(() => { setSidebarOpen(false); }, [pathname]);
 
   // Background data fetching (all non-fatal)
   useEffect(() => {
@@ -113,7 +117,7 @@ export default function AdminLayout({ children }) {
   useEffect(() => {
     if (!hydrated) return;
     if (!role) { router.replace('/login'); return; }
-    if (role !== 'platform_admin') router.replace('/dashboard');
+    if (role !== 'platform_admin') router.replace('/login');
   }, [hydrated, role, router]);
 
   // ── Loading spinner while Zustand rehydrates ───────────────────────────────
@@ -143,8 +147,8 @@ export default function AdminLayout({ children }) {
 
   if (role !== 'platform_admin') return null;
 
-  const badges     = { jobs: failedJobCount, payouts: pendingPayouts };
-  const isActive   = (href) => pathname === href || pathname.startsWith(href + '/');
+  const badges      = { jobs: failedJobCount, payouts: pendingPayouts };
+  const isActive    = (href) => pathname === href || pathname.startsWith(href + '/');
   const activeLabel = NAV_GROUPS.flatMap(g => g.items).find(i => isActive(i.href))?.label || 'Admin';
 
   function handleLogout() {
@@ -160,22 +164,37 @@ export default function AdminLayout({ children }) {
       fontFamily: 'var(--font, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif)',
     }}>
 
-      {/* ══ LEFT SIDEBAR ════════════════════════════════════════════════════════ */}
-      <aside style={{
-        width: SIDEBAR_W,
-        minWidth: SIDEBAR_W,
-        background: '#0D3B6E',
-        display: 'flex',
-        flexDirection: 'column',
-        position: 'sticky',
-        top: 0,
-        height: '100vh',
-        overflowY: 'auto',
-        boxShadow: '2px 0 12px rgba(0,0,0,0.12)',
-        zIndex: 40,
-        flexShrink: 0,
-      }}>
+      {/* ══ MOBILE BACKDROP ═══════════════════════════════════════════════════ */}
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="admin-backdrop"
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            zIndex: 39,
+          }}
+        />
+      )}
 
+      {/* ══ LEFT SIDEBAR ══════════════════════════════════════════════════════ */}
+      <aside
+        className={`admin-sidebar${sidebarOpen ? ' sidebar-open' : ''}`}
+        style={{
+          width: SIDEBAR_W,
+          minWidth: SIDEBAR_W,
+          background: '#0D3B6E',
+          display: 'flex',
+          flexDirection: 'column',
+          position: 'sticky',
+          top: 0,
+          height: '100vh',
+          overflowY: 'auto',
+          boxShadow: '2px 0 12px rgba(0,0,0,0.12)',
+          zIndex: 40,
+          flexShrink: 0,
+          transition: 'transform 0.25s ease',
+        }}
+      >
         {/* Brand header */}
         <div style={{
           padding: '18px 14px 14px',
@@ -227,7 +246,6 @@ export default function AdminLayout({ children }) {
         <nav style={{ flex: 1, overflowY: 'auto', padding: '10px 8px 6px' }}>
           {NAV_GROUPS.map((group) => (
             <div key={group.title} style={{ marginBottom: 2 }}>
-              {/* Group label */}
               <div style={{
                 fontSize: 9, fontWeight: 700,
                 color: 'rgba(255,255,255,0.3)',
@@ -280,13 +298,12 @@ export default function AdminLayout({ children }) {
           ))}
         </nav>
 
-        {/* Sidebar footer: user info + logout */}
+        {/* Sidebar footer */}
         <div style={{
           borderTop: '1px solid rgba(255,255,255,0.1)',
           padding: '10px 8px 14px',
           flexShrink: 0,
         }}>
-          {/* User info */}
           <div style={{
             padding: '8px 10px',
             borderRadius: 8,
@@ -301,7 +318,6 @@ export default function AdminLayout({ children }) {
             </div>
           </div>
 
-          {/* Sign out */}
           <button
             onClick={handleLogout}
             style={{
@@ -318,14 +334,14 @@ export default function AdminLayout({ children }) {
         </div>
       </aside>
 
-      {/* ══ MAIN AREA ═══════════════════════════════════════════════════════════ */}
+      {/* ══ MAIN AREA ════════════════════════════════════════════════════════ */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
 
         {/* Top bar */}
         <header style={{
           background: '#fff',
           borderBottom: '1px solid #e2e8f0',
-          padding: '0 24px',
+          padding: '0 16px 0 24px',
           height: 50,
           display: 'flex',
           alignItems: 'center',
@@ -335,16 +351,31 @@ export default function AdminLayout({ children }) {
           zIndex: 30,
           boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
           flexShrink: 0,
+          gap: 8,
         }}>
-          {/* Page title */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 400 }}>Admin</span>
+          {/* Left: hamburger + breadcrumb */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            {/* Mobile hamburger button — shown only on mobile via CSS */}
+            <button
+              onClick={() => setSidebarOpen(o => !o)}
+              className="admin-hamburger"
+              aria-label="Toggle navigation menu"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                padding: '6px 8px', borderRadius: 6, fontSize: 20,
+                color: '#475569', lineHeight: 1, flexShrink: 0,
+                display: 'none', // shown via media query
+              }}
+            >
+              ☰
+            </button>
+            <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 400, whiteSpace: 'nowrap' }}>Admin</span>
             <span style={{ color: '#cbd5e1' }}>/</span>
-            <span style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{activeLabel}</span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeLabel}</span>
           </div>
 
-          {/* Top-right quick links */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Right: quick links */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             {activeDeliveries > 0 && (
               <Link href="/admin/live" style={{
                 display: 'flex', alignItems: 'center', gap: 5,
@@ -378,14 +409,39 @@ export default function AdminLayout({ children }) {
       </div>
 
       <style>{`
-        @keyframes tn-pulse {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.3; }
+        /* Global keyframes used across admin pages */
+        @keyframes tn-spin    { to { transform: rotate(360deg); } }
+        @keyframes tn-pulse   { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        @keyframes pulse      { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @keyframes shimmer    { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        @keyframes livePulse  {
+          0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+          70%  { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+          100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
         }
-        aside::-webkit-scrollbar       { width: 3px; }
-        aside::-webkit-scrollbar-track { background: transparent; }
-        aside::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
-        nav a:hover { color: rgba(255,255,255,0.9) !important; background: rgba(255,255,255,0.06) !important; }
+
+        /* Scrollbar styling */
+        .admin-sidebar::-webkit-scrollbar       { width: 3px; }
+        .admin-sidebar::-webkit-scrollbar-track { background: transparent; }
+        .admin-sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+        .admin-sidebar nav a:hover {
+          color: rgba(255,255,255,0.9) !important;
+          background: rgba(255,255,255,0.06) !important;
+        }
+
+        /* ── Mobile sidebar ────────────────────────────────────── */
+        @media (max-width: 768px) {
+          .admin-sidebar {
+            position: fixed !important;
+            top: 0 !important; left: 0 !important; bottom: 0 !important;
+            transform: translateX(-100%);
+            min-width: 240px !important;
+          }
+          .admin-sidebar.sidebar-open {
+            transform: translateX(0);
+          }
+          .admin-hamburger { display: flex !important; }
+        }
       `}</style>
     </div>
   );

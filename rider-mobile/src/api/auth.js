@@ -12,16 +12,25 @@ export async function requestOtp(phone) {
 
 /**
  * Step 2: Verify OTP and receive a session token.
- * Returns { token, user: { id, role, phone } }
+ * Backend expects { phone, token } — NOT { phone, otp }
+ * Returns unwrapped { access_token, refresh_token, user, ... }
  */
 export async function verifyOtp(phone, otp) {
-  const data = await client.post('/auth/otp/verify', { phone, otp });
-  // Persist token to encrypted storage
-  if (data?.token) {
-    await SecureStore.setItemAsync('auth_token', data.token);
-    await SecureStore.setItemAsync('auth_user', JSON.stringify(data.user));
+  // Backend field is 'token', not 'otp' (Supabase terminology)
+  const data = await client.post('/auth/otp/verify', { phone, token: otp });
+  // Backend returns snake_case Supabase session: { access_token, refresh_token, user }
+  const accessToken = data?.session?.access_token || data?.access_token || data?.token;
+  const user        = data?.user;
+  if (accessToken) {
+    await SecureStore.setItemAsync('auth_token', accessToken);
+    if (data?.session?.refresh_token) {
+      await SecureStore.setItemAsync('auth_refresh', data.session.refresh_token);
+    }
+    if (user) {
+      await SecureStore.setItemAsync('auth_user', JSON.stringify(user));
+    }
   }
-  return data;
+  return { token: accessToken, user };
 }
 
 /**
@@ -29,6 +38,7 @@ export async function verifyOtp(phone, otp) {
  */
 export async function signOut() {
   await SecureStore.deleteItemAsync('auth_token').catch(() => {});
+  await SecureStore.deleteItemAsync('auth_refresh').catch(() => {});
   await SecureStore.deleteItemAsync('auth_user').catch(() => {});
 }
 

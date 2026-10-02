@@ -2,10 +2,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { format }   from 'date-fns';
 import { ordersApi, inventoryApi } from '../../../lib/api';
+import Cookies from 'js-cookie';
 
 function getToken() {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+  return Cookies.get('tn_token') || null;
 }
 
 function StatCard({ emoji, label, value, sub, color }) {

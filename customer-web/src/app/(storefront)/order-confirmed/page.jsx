@@ -24,12 +24,13 @@ export async function generateMetadata() {
   };
 }
 
-export default function OrderConfirmedPage({ searchParams }) {
-  const orderNumber = searchParams?.num || searchParams?.id || '';
+export default async function OrderConfirmedPage({ searchParams }) {
+  const sp          = await searchParams;
+  const orderNumber = sp?.num || sp?.id || '';
   // H5: savings from first-order discount (WELCOME10) passed as ?saved=<paise>
-  const savedPaise  = parseInt(searchParams?.saved || '0', 10);
+  const savedPaise  = parseInt(sp?.saved || '0', 10);
   const savedRupees = savedPaise > 0 ? Math.round(savedPaise / 100) : 0;
-  const earnedStamp = searchParams?.stamp === '1'; // loyalty stamp earned
+  const earnedStamp = sp?.stamp === '1'; // loyalty stamp earned
 
   return (
     <div className="sf-wrap">

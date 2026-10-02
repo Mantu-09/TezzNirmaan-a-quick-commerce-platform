@@ -1,19 +1,26 @@
-﻿// (storefront)/referral/page.jsx — P14-3 Upgraded
+// (storefront)/referral/page.jsx — P14-3 Upgraded
 // WhatsApp share, progress bar, referral leaderboard.
 'use client';
 import { useEffect, useState } from 'react';
+import Cookies from 'js-cookie';
+import { useRouter } from 'next/navigation';
 
-const fmt = p => `₹${Math.floor(p / 100)}`;
+const fmt = p => `₹${Math.floor((p || 0) / 100)}`;
 
 export default function ReferralPage() {
+  const router = useRouter();
   const [data, setData]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied]  = useState(false);
 
   useEffect(() => {
-    fetch('/api/backend/customer/referral-stats', { credentials: 'include' })
+    const token = Cookies.get('tn_token');
+    if (!token) { router.push('/auth?redirect=/referral'); return; }
+    fetch('/api/backend/customer/referral-stats', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
       .then(r => r.json()).then(d => setData(d.data)).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  }, [router]);
 
   function copyCode() {
     navigator.clipboard.writeText(data?.referral_code || '').then(() => {

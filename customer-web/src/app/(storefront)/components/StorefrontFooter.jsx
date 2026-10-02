@@ -27,7 +27,7 @@ export default function StorefrontFooter() {
                 ▶ Google Play
               </a>
               <a href="https://apps.apple.com" className="sf-app-badge" target="_blank" rel="noopener">
-                 App Store
+                🍎 App Store
               </a>
             </div>
           </div>

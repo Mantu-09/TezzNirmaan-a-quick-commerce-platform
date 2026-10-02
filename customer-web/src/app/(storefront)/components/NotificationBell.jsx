@@ -1,9 +1,10 @@
-﻿// (storefront)/components/NotificationBell.jsx — P14-5
+// (storefront)/components/NotificationBell.jsx — P14-5
 // Bell icon in header with unread badge count.
 // Dropdown shows last 10 notifications. Click to open /notifications.
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import Cookies from 'js-cookie';
 
 export default function NotificationBell() {
   const [unread, setUnread]   = useState(0);
@@ -12,8 +13,10 @@ export default function NotificationBell() {
   const ref = useRef(null);
 
   useEffect(() => {
-    loadNotifs();
-    const iv = setInterval(loadNotifs, 60000); // Refresh every 60s
+    const token = Cookies.get('tn_token');
+    if (!token) return; // Not logged in — don't poll
+    loadNotifs(token);
+    const iv = setInterval(() => loadNotifs(Cookies.get('tn_token')), 60000);
     return () => clearInterval(iv);
   }, []);
 
@@ -23,9 +26,12 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  async function loadNotifs() {
+  async function loadNotifs(token) {
+    if (!token) return;
     try {
-      const r = await fetch('/api/backend/customer/notifications?limit=10', { credentials: 'include' });
+      const r = await fetch('/api/backend/customer/notifications?limit=10', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (!r.ok) return;
       const d = await r.json();
       setUnread(d.data?.unread_count || 0);
@@ -34,8 +40,12 @@ export default function NotificationBell() {
   }
 
   async function markAllRead() {
-    await fetch('/api/backend/customer/notifications/read-all', { method: 'POST', credentials: 'include' })
-      .catch(() => {});
+    const token = Cookies.get('tn_token');
+    if (!token) return;
+    await fetch('/api/backend/customer/notifications/read-all', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => {});
     setUnread(0);
     setNotifs(prev => prev.map(n => ({ ...n, is_read: true })));
   }

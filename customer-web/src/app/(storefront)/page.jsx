@@ -104,12 +104,27 @@ function SectionHeader({ title, sub, href, linkLabel }) {
 function ProductRow({ products, citySlug }) {
   if (!products.length) return null;
   return (
-    <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8, scrollSnapType: 'x mandatory' }}>
-      {products.map(p => (
-        <div key={p.inventory_id} style={{ minWidth: 180, maxWidth: 180, scrollSnapAlign: 'start', flexShrink: 0 }}>
-          <ProductCard product={p} shopSlug={p.shop?.slug} citySlug={citySlug} />
-        </div>
-      ))}
+    <div style={{ position: 'relative' }}>
+      <div style={{
+        display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8,
+        scrollSnapType: 'x mandatory', WebkitOverflowScrolling: 'touch',
+        /* Hide scrollbar for a cleaner look — arrow keys and touch still work */
+        msOverflowStyle: 'none', scrollbarWidth: 'none',
+      }}>
+        {products.map(p => (
+          <div key={p.inventory_id} style={{ minWidth: 180, maxWidth: 180, scrollSnapAlign: 'start', flexShrink: 0 }}>
+            <ProductCard product={p} shopSlug={p.shop?.slug} citySlug={citySlug} />
+          </div>
+        ))}
+      </div>
+      {/* Right-edge fade: visual hint that there's more to scroll */}
+      {products.length > 2 && (
+        <div style={{
+          position: 'absolute', right: 0, top: 0, bottom: 8, width: 40,
+          background: 'linear-gradient(to right, transparent, var(--sf-bg, #f9fafb))',
+          pointerEvents: 'none',
+        }} />
+      )}
     </div>
   );
 }
@@ -182,10 +197,10 @@ export default async function StorefrontHomePage({ searchParams }) {
         {flashSalesData?.length > 0 && (
           <div style={{ marginTop: 16 }}>
             <FlashSalesBanner flashSales={flashSalesData} />
-            {/* P14-3: Referral banner (client-only, dismissible) */}
-            <ReferralBanner />
           </div>
         )}
+        {/* P14-3: Referral banner (client-only, dismissible) — always shown */}
+        <ReferralBanner />
       </div>
 
       {/* ── Category pills ──────────────────────────────────────── */}
@@ -274,7 +289,7 @@ export default async function StorefrontHomePage({ searchParams }) {
               <div className="sf-empty-title">Coming Soon in Your Area</div>
               <div className="sf-empty-sub">
                 We're onboarding shops in {cityLabel}.<br />
-                <Link href="/shop-signup" style={{ color: 'var(--sf-primary)' }}>Partner with us →</Link>
+                <Link href="/join" style={{ color: 'var(--sf-primary)' }}>Partner with us →</Link>
               </div>
             </div>
           )}
@@ -330,10 +345,12 @@ export default async function StorefrontHomePage({ searchParams }) {
             <p style={{ opacity: 0.88, fontSize: 14 }}>Track orders live, get push alerts, and order in under 30 seconds.</p>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <a href="#" style={{ padding: '10px 18px', borderRadius: 10, background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.4)', color: '#fff', fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>
+            <a href="https://play.google.com/store" target="_blank" rel="noopener" aria-label="Get it on Google Play (coming soon)"
+              style={{ padding: '10px 18px', borderRadius: 10, background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.4)', color: '#fff', fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>
               🤖 Android
             </a>
-            <a href="#" style={{ padding: '10px 18px', borderRadius: 10, background: '#fff', color: 'var(--sf-primary,#f97316)', fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>
+            <a href="https://apps.apple.com" target="_blank" rel="noopener" aria-label="Download on the App Store (coming soon)"
+              style={{ padding: '10px 18px', borderRadius: 10, background: '#fff', color: 'var(--sf-primary,#f97316)', fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>
               🍎 iOS
             </a>
           </div>

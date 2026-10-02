@@ -1,7 +1,9 @@
 ﻿// admin/retention/page.jsx — P14-7
 // Customer retention metrics: new, repeat, churned, top customers.
 'use client';
-import { useEffect, useState } from 'react';
+
+import { api } from '../../../lib/api';
+import Cookies from 'js-cookie';import { useEffect, useState } from 'react';
 
 export default function AdminRetentionPage() {
   const [data, setData]   = useState(null);
@@ -12,7 +14,7 @@ export default function AdminRetentionPage() {
 
   async function loadData() {
     setLoading(true);
-    const r = await fetch(`/api/backend/admin/retention-metrics?days=${days}`, { credentials: 'include' });
+    const r = await fetch(`/api/backend/admin/retention-metrics?days=${days}`, { headers: { Authorization: `Bearer ${Cookies.get('tn_token')}` } });
     const d = await r.json();
     setData(d.data);
     setLoading(false);

@@ -1,7 +1,9 @@
 // admin/delivery-zones/page.jsx — P15-6
 // Create and manage city delivery zones with surge pricing.
 'use client';
-import { useEffect, useState } from 'react';
+
+import { api } from '../../../lib/api';
+import Cookies from 'js-cookie';import { useEffect, useState } from 'react';
 
 export default function AdminDeliveryZonesPage() {
   const [zones, setZones]   = useState([]);
@@ -12,12 +14,12 @@ export default function AdminDeliveryZonesPage() {
 
   useEffect(() => {
     loadZones();
-    fetch('/api/backend/public/cities', { credentials: 'include' }).then(r => r.json())
+    api.get('/public/cities').then(r => r.json())
       .then(d => { setCities(d.data?.cities || []); if (d.data?.cities?.[0]) setForm(f => ({ ...f, city_id: d.data.cities[0].id })); }).catch(() => {});
   }, []);
 
   async function loadZones() {
-    const r = await fetch('/api/backend/admin/delivery-zones', { credentials: 'include' });
+    const r = await api.get('/admin/delivery-zones');
     const d = await r.json();
     setZones(d.data?.zones || []);
   }
@@ -25,14 +27,14 @@ export default function AdminDeliveryZonesPage() {
   async function save() {
     setSaving(true);
     const body = { ...form, base_fee_paise: form.base_fee_paise * 100, surge_multiplier: +form.surge_multiplier, cod_limit_paise: form.cod_limit_paise * 100 };
-    const r = await fetch('/api/backend/admin/delivery-zones', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch('/api/backend/admin/delivery-zones', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` }, body: JSON.stringify(body) });
     setSaving(false);
     if (r.ok) { setMsg('✅ Zone created'); loadZones(); }
     else setMsg('❌ Error creating zone');
   }
 
   async function toggleZone(zone) {
-    await fetch(`/api/backend/admin/delivery-zones/${zone.id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: !zone.is_active }) });
+    await fetch(`/api/backend/admin/delivery-zones/${zone.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` }, body: JSON.stringify({ is_active: !zone.is_active }) });
     loadZones();
   }
 

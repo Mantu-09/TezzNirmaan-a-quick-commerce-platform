@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { api } from '../../../../lib/api';
+import { api } from '../../../lib/api';
 
 const COMMISSION_CATEGORIES = [
   { key: 'groceries',     label: 'Groceries'      },

@@ -1,5 +1,6 @@
-'use client';
-// admin/performance/page.jsx — P17-9
+﻿'use client';
+
+import { api } from '../../../lib/api';// admin/performance/page.jsx — P17-9
 // Real-time server performance and platform health dashboard.
 import { useState, useEffect, useCallback } from 'react';
 
@@ -41,7 +42,7 @@ export default function PerformancePage() {
 
   const load = useCallback(async () => {
     setRefreshing(true);
-    const r = await fetch('/api/backend/admin/performance/metrics', { credentials: 'include' });
+    const r = await api.get('/admin/performance/metrics');
     const d = await r.json();
     setMetrics(d.data);
     setLastRefresh(new Date());

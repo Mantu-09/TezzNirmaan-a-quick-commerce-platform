@@ -72,8 +72,15 @@ export default function B2BEMIPage() {
 
   useEffect(() => { loadPlans(); }, []);
 
+  async function getAuthHeaders(extra = {}) {
+    const Cookies = (await import('js-cookie')).default;
+    const token = Cookies.get('tn_token');
+    return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra };
+  }
+
   async function loadPlans() {
-    const r = await fetch('/api/backend/customer/b2b/emi-plans', { credentials: 'include' });
+    const headers = await getAuthHeaders();
+    const r = await fetch('/api/backend/customer/b2b/emi-plans', { headers });
     const d = await r.json();
     setPlans(d.data?.plans || []);
     setLoading(false);
@@ -81,8 +88,9 @@ export default function B2BEMIPage() {
 
   async function setupAutopay(planId) {
     setMsg('Setting up UPI autopay...');
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
     const r = await fetch('/api/backend/payments/subscriptions/create', {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers,
       body: JSON.stringify({ emi_plan_id: planId }),
     });
     const d = await r.json();

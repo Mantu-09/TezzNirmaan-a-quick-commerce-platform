@@ -86,13 +86,15 @@ function OtpModal({ onClose, onSuccess }) {
       const res = await fetch(`${API}/api/v1/auth/otp/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: `+91${digits}`, otp: otpString }),
+        body: JSON.stringify({ phone: `+91${digits}`, token: otpString }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error?.message || 'Invalid OTP');
-      const { session } = data.data;
-      Cookies.set('tn_token',   session.accessToken,  { expires: 7,  sameSite: 'lax' });
-      Cookies.set('tn_refresh', session.refreshToken, { expires: 30, sameSite: 'lax' });
+      if (!res.ok) throw new Error(data?.error?.message || data?.message || 'Invalid OTP');
+      const session = data.data?.session || data.data || {};
+      const accessToken  = session.access_token  || session.accessToken;
+      const refreshToken = session.refresh_token || session.refreshToken;
+      Cookies.set('tn_token',   accessToken,  { expires: 7,  sameSite: 'lax' });
+      Cookies.set('tn_refresh', refreshToken, { expires: 30, sameSite: 'lax' });
       onSuccess({ phone: `+91${digits}` });
     } catch (err) {
       setError(err.message || 'Something went wrong');
@@ -317,6 +319,7 @@ export default function StorefrontHeader() {
   const [user,      setUser]       = useState(null);
   const [menuOpen,  setMenuOpen]   = useState(false);
   const [modalOpen, setModalOpen]  = useState(false);
+  const [deliveryMode, setDeliveryMode] = useState('quick');
   const router  = useRouter();
   const menuRef = useRef(null);
 
@@ -556,17 +559,30 @@ export default function StorefrontHeader() {
             maxWidth: 1280, margin: '0 auto', padding: '0 20px',
             height: 38, display: 'flex', alignItems: 'center', gap: 4,
           }}>
-            <Link href={`/?city=${citySlug}&mode=quick`} style={{
-              display:'flex', alignItems:'center', gap:5,
-              padding:'5px 14px', borderRadius:20, fontSize:12, fontWeight:600,
-              textDecoration:'none', background:'#fff3ec', color:'#E8740C',
-              border:'1px solid rgba(232,116,12,0.2)',
-            }}>⚡ Quick · 60–90 min</Link>
-            <Link href={`/?city=${citySlug}&mode=scheduled`} style={{
-              display:'flex', alignItems:'center', gap:5,
-              padding:'5px 14px', borderRadius:20, fontSize:12, fontWeight:600,
-              textDecoration:'none', color:'#64748b', border:'1px solid transparent',
-            }}>📅 Scheduled · Same day</Link>
+            <button
+              onClick={() => { setDeliveryMode('quick'); router.push(`/?city=${citySlug}&mode=quick`); }}
+              style={{
+                display:'flex', alignItems:'center', gap:5,
+                padding:'5px 14px', borderRadius:20, fontSize:12, fontWeight:600,
+                textDecoration:'none', cursor:'pointer', border:'none',
+                background: deliveryMode === 'quick' ? '#fff3ec' : 'transparent',
+                color:      deliveryMode === 'quick' ? '#E8740C' : '#64748b',
+                outline: deliveryMode === 'quick' ? '1px solid rgba(232,116,12,0.2)' : 'none',
+                fontFamily: 'inherit',
+              }}
+            >⚡ Quick · 60–90 min</button>
+            <button
+              onClick={() => { setDeliveryMode('scheduled'); router.push(`/?city=${citySlug}&mode=scheduled`); }}
+              style={{
+                display:'flex', alignItems:'center', gap:5,
+                padding:'5px 14px', borderRadius:20, fontSize:12, fontWeight:600,
+                textDecoration:'none', cursor:'pointer', border:'none',
+                background: deliveryMode === 'scheduled' ? '#f0f9ff' : 'transparent',
+                color:      deliveryMode === 'scheduled' ? '#0284c7' : '#64748b',
+                outline: deliveryMode === 'scheduled' ? '1px solid rgba(2,132,199,0.2)' : 'none',
+                fontFamily: 'inherit',
+              }}
+            >📅 Scheduled · Same day</button>
           </div>
         </div>
       </header>

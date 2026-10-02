@@ -28,46 +28,45 @@ import { client }            from '../../api/client';
 // ── API helpers ──────────────────────────────────────────────
 // All calls go through the Express backend (authed via Bearer token
 // managed by client.js / axios interceptor). No Supabase direct access.
+// NOTE: client.js response interceptor already unwraps { success, data } envelope,
+// so the returned value IS the data directly — do NOT destructure { data }.
 async function fetchRiderStatus() {
-  const { data } = await client.get('/rider/status');
-  return data?.data || {};
+  const res = await client.get('/rider/status');
+  return res || {};
 }
 
 async function fetchTodayStats() {
-  const { data } = await client.get('/rider/stats/today');
-  return data?.data || { deliveriesToday: 0 };
+  const res = await client.get('/rider/stats/today');
+  return res || { deliveriesToday: 0 };
 }
 
 async function fetchActiveDelivery() {
-  const { data } = await client.get('/rider/deliveries/active');
-  return data?.data || null;
+  const res = await client.get('/rider/deliveries/active');
+  return res || null;
 }
 
 // Session I: poll for offered (pending-accept) deliveries every 5 seconds
 async function fetchOfferedDeliveries() {
-  const { data } = await client.get('/rider/deliveries/offered');
-  return data?.data?.offers || [];
+  const res = await client.get('/rider/deliveries/offered');
+  return res?.offers || [];
 }
 
 async function acceptDeliveryOffer(assignmentId) {
-  const { data } = await client.post(`/rider/deliveries/${assignmentId}/accept`);
-  return data;
+  return client.post(`/rider/deliveries/${assignmentId}/accept`);
 }
 
 async function declineDeliveryOffer(assignmentId) {
-  const { data } = await client.post(`/rider/deliveries/${assignmentId}/decline`, { reason: 'Rider declined' });
-  return data;
+  return client.post(`/rider/deliveries/${assignmentId}/decline`, { reason: 'Rider declined' });
 }
 
 async function updateRiderOnlineStatus(isOnline) {
-  const { data } = await client.patch('/rider/status', { is_online: isOnline });
-  return data;
+  return client.patch('/rider/status', { is_online: isOnline });
 }
 
 // R3: Fetch rider's current COD cash-holding summary
 async function fetchCodSummary() {
-  const { data } = await client.get('/rider/cod/summary');
-  return data?.data || { total_collected_paise: 0, pending_orders: [] };
+  const res = await client.get('/rider/cod/summary');
+  return res || { total_collected_paise: 0, pending_orders: [] };
 }
 
 

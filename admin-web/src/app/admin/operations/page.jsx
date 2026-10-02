@@ -1,7 +1,8 @@
-﻿// admin/operations/page.jsx — P15-9
+// admin/operations/page.jsx — P15-9
 // Live dispatch board: orders pipeline + active rider overview.
 'use client';
 import { useEffect, useState } from 'react';
+import { api } from '../../../lib/api';
 
 const STATUS_STAGES = ['pending','confirmed','preparing','out_for_delivery','delivered'];
 const STATUS_ICON = { pending: '🕐', confirmed: '✅', preparing: '👨‍🍳', out_for_delivery: '🛵', delivered: '📦', cancelled: '❌' };
@@ -30,9 +31,8 @@ export default function AdminOperationsPage() {
 
   async function loadData() {
     try {
-      // Fetch today's active orders
-      const r = await fetch('/api/backend/admin/orders?status=active&limit=200', { credentials: 'include' });
-      const d = await r.json();
+      // Fetch today's active orders via authenticated api helper
+      const d = await api.get('/admin/orders?status=active&limit=200');
       const allOrders = d.data?.orders || d.orders || [];
 
       // Compute stats

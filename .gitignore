@@ -86,3 +86,7 @@ mobile/ios/
 # Debug / temp files
 backend/test-session-h.txt
 backend/test-*.txt
+
+# Ensure all local env variants are ignored
+.env*.local
+.env.*.local

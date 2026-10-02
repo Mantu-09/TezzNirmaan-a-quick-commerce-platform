@@ -1,5 +1,7 @@
 'use client';
-// admin/ai-assistant/page.jsx — P17-3
+
+import { api } from '../../../lib/api';
+import Cookies from 'js-cookie';// admin/ai-assistant/page.jsx — P17-3
 // AI-powered admin chat using Google Gemini with live platform KPI context.
 import { useState, useRef, useEffect } from 'react';
 
@@ -63,7 +65,7 @@ export default function AIAssistantPage() {
     try {
       const history = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content }));
       const r = await fetch('/api/backend/admin/ai/chat', {
-        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` },
         body: JSON.stringify({ message: msg, history }),
       });
       const d = await r.json();

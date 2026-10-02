@@ -129,9 +129,26 @@ export default function ProductDetailClient({ product }) {
                 </Link>
               )
             }
-            <Link href="/cart" className="sf-btn sf-btn-ghost sf-btn-lg" style={{ flex: 1, justifyContent: 'center' }}>
+            <button
+              className="sf-btn sf-btn-ghost sf-btn-lg"
+              style={{ flex: 1, justifyContent: 'center' }}
+              onClick={() => {
+                addItem({
+                  inventory_id:     product.inventory_id,
+                  product_id:       product.product_id,
+                  name:             product.name,
+                  price:            product.price,
+                  discounted_price: product.discounted_price,
+                  image_url:        product.image_url,
+                  unit:             product.unit,
+                  shop_slug:        product.shop?.slug || null,
+                  quantity:         qty,
+                });
+                window.location.href = '/cart';
+              }}
+            >
               Buy Now
-            </Link>
+            </button>
           </div>
 
           {/* Description */}

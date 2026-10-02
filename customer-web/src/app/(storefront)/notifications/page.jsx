@@ -1,21 +1,27 @@
-﻿// (storefront)/notifications/page.jsx — P14-5
+// (storefront)/notifications/page.jsx — P14-5
 // Full notification history with filter tabs.
 'use client';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Cookies from 'js-cookie';
 
 const TYPES = { all: 'All', order: 'Orders', wallet: 'Wallet', offer: 'Offers', reminder: 'Reminders' };
 
 export default function NotificationsPage() {
+  const router = useRouter();
   const [notifs, setNotifs]   = useState([]);
   const [tab, setTab]         = useState('all');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/backend/customer/notifications?limit=50', { credentials: 'include' })
+    const token = Cookies.get('tn_token');
+    if (!token) { router.push('/auth?redirect=/notifications'); return; }
+    const headers = { Authorization: `Bearer ${token}` };
+    fetch('/api/backend/customer/notifications?limit=50', { headers })
       .then(r => r.json()).then(d => setNotifs(d.data?.notifications || [])).catch(() => {}).finally(() => setLoading(false));
     // Mark all as read
-    fetch('/api/backend/customer/notifications/read-all', { method: 'POST', credentials: 'include' }).catch(() => {});
-  }, []);
+    fetch('/api/backend/customer/notifications/read-all', { method: 'POST', headers }).catch(() => {});
+  }, [router]);
 
   const filtered = tab === 'all' ? notifs : notifs.filter(n => n.type?.startsWith(tab));
 

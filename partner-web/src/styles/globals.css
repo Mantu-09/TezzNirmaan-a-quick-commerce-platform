@@ -471,6 +471,10 @@ label { font-size: var(--text-sm); font-weight: 500; color: var(--text); display
   .grid-2 { grid-template-columns: 1fr; }
   .page-body { padding: var(--s4); }
   .hide-mobile { display: none; }
+  /* Show mobile overlay backdrop when sidebar is open */
+  .mobile-overlay { display: block !important; }
+  /* Show hamburger menu toggle button in top header */
+  #sidebar-toggle { display: flex !important; }
 }
 @media (max-width: 480px) {
   .grid-4 { grid-template-columns: 1fr; }

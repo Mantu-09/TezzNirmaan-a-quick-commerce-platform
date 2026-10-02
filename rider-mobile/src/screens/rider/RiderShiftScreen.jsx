@@ -26,24 +26,23 @@ import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
 import { client }        from '../../api/client';
 
 // ── API helpers ───────────────────────────────────────────────
+// client.js interceptor already unwraps { success, data } — return res directly
 async function fetchAvailableShifts() {
-  const { data } = await client.get('/rider/shifts/available');
-  return data?.data || [];
+  const res = await client.get('/rider/shifts/available');
+  return res || [];
 }
 
 async function fetchMyShifts() {
-  const { data } = await client.get('/rider/shifts/mine');
-  return data?.data || [];
+  const res = await client.get('/rider/shifts/mine');
+  return res || [];
 }
 
 async function bookShift(shiftId) {
-  const { data } = await client.post(`/rider/shifts/${shiftId}/book`);
-  return data;
+  return client.post(`/rider/shifts/${shiftId}/book`);
 }
 
 async function cancelShift(shiftId) {
-  const { data } = await client.delete(`/rider/shifts/${shiftId}`);
-  return data;
+  return client.delete(`/rider/shifts/${shiftId}`);
 }
 
 // ── Helpers ───────────────────────────────────────────────────

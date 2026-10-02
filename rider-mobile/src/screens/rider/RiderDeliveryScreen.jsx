@@ -34,46 +34,23 @@ import useAuthStore         from '../../store/authStore';
 import { Colors, Typography, Spacing, BorderRadius, Shadow } from '../../theme';
 
 // ── API helpers ───────────────────────────────────────────────
-async function getAuthHeader() {
-  const { supabaseAdmin } = await import('../../lib/supabase');
-  const { data: { session } } = await supabaseAdmin.auth.getSession();
-  return { 'Authorization': `Bearer ${session?.access_token}`, 'Content-Type': 'application/json' };
-}
-
-const API_URL = process.env.EXPO_PUBLIC_API_URL;
+// Uses the authenticated axios client — token is attached by the request interceptor
+// in client.js (reads from SecureStore). No Supabase Admin needed on mobile.
+import { client } from '../../api/client';
 
 async function fetchAssignment(assignmentId) {
-  const headers = await getAuthHeader();
-  const res = await fetch(`${API_URL}/api/v1/rider/deliveries/${assignmentId}`, { headers });
-  if (!res.ok) throw new Error('Failed to fetch assignment');
-  const json = await res.json();
-  return json.data || json;
+  return client.get(`/rider/deliveries/${assignmentId}`);
 }
 
 async function markPickedUp(assignmentId) {
-  const headers = await getAuthHeader();
-  const res = await fetch(`${API_URL}/api/v1/rider/deliveries/${assignmentId}/pickup`, {
-    method: 'POST', headers,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || 'Failed to mark picked up');
-  }
-  return res.json();
+  return client.post(`/rider/deliveries/${assignmentId}/pickup`);
 }
 
 async function markDelivered(assignmentId, proofPhotoUrl = null) {
-  const headers = await getAuthHeader();
-  const body = proofPhotoUrl ? JSON.stringify({ proof_photo_url: proofPhotoUrl }) : '{}';
-  const res = await fetch(`${API_URL}/api/v1/rider/deliveries/${assignmentId}/deliver`, {
-    method: 'POST', headers, body,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || 'Failed to mark delivered');
-  }
-  return res.json();
+  const body = proofPhotoUrl ? { proof_photo_url: proofPhotoUrl } : {};
+  return client.post(`/rider/deliveries/${assignmentId}/deliver`, body);
 }
+
 
 // ── Confetti ──────────────────────────────────────────────────
 // Pure RN Animated API — no external library

@@ -57,10 +57,16 @@ export default function ForecastPage() {
 
   async function loadForecast() {
     setLoading(true);
-    const r = await fetch(`/api/backend/shop/demand-forecast?days=${days}`, { credentials: 'include' });
-    const d = await r.json();
-    setForecast(d.data?.forecast || []);
-    setGenAt(d.data?.generated_at ? new Date(d.data.generated_at).toLocaleTimeString('en-IN') : '');
+    try {
+      const Cookies = (await import('js-cookie')).default;
+      const token = Cookies.get('tn_token');
+      const r = await fetch(`/api/backend/shop/demand-forecast?days=${days}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const d = await r.json();
+      setForecast(d.data?.forecast || []);
+      setGenAt(d.data?.generated_at ? new Date(d.data.generated_at).toLocaleTimeString('en-IN') : '');
+    } catch {}
     setLoading(false);
   }
 

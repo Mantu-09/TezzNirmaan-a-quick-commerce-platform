@@ -1,4 +1,4 @@
-﻿// (storefront)/components/RemindMeButton.jsx — P14-4
+// (storefront)/components/RemindMeButton.jsx — P14-4
 // "Remind me when back in stock" or "Remind me to reorder"
 // Calls POST /customer/reminders — shows toast on success.
 'use client';
@@ -10,10 +10,14 @@ export default function RemindMeButton({ productId, type = 'restock', label }) {
   async function handleClick() {
     setState('loading');
     try {
+      const Cookies = (await import('js-cookie')).default;
+      const token = Cookies.get('tn_token');
       const r = await fetch('/api/backend/customer/reminders', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ product_id: productId, reminder_type: type }),
       });
       setState(r.ok ? 'done' : 'error');

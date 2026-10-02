@@ -1,5 +1,7 @@
-'use client';
-// admin/broadcasts/page.jsx — P17-7
+﻿'use client';
+
+import { api } from '../../../lib/api';
+import Cookies from 'js-cookie';// admin/broadcasts/page.jsx — P17-7
 // WhatsApp broadcast campaign manager.
 import { useState, useEffect } from 'react';
 
@@ -31,7 +33,7 @@ export default function BroadcastsPage() {
   useEffect(() => { loadTemplates(); loadHistory(); }, []);
 
   async function loadTemplates() {
-    const r = await fetch('/api/backend/admin/broadcasts/templates', { credentials: 'include' });
+    const r = await api.get('/admin/broadcasts/templates');
     const d = await r.json();
     const tmpl = d.data?.templates || {};
     setTemplates(tmpl);
@@ -39,14 +41,14 @@ export default function BroadcastsPage() {
   }
 
   async function loadHistory() {
-    const r = await fetch('/api/backend/admin/broadcasts/history', { credentials: 'include' });
+    const r = await api.get('/admin/broadcasts/history');
     const d = await r.json();
     setCampaigns(d.data?.campaigns || []);
   }
 
   async function fetchReach() {
     setReach(null);
-    const r = await fetch(`/api/backend/admin/broadcasts/reach?segment=${segment}`, { credentials: 'include' });
+    const r = await fetch(`/api/backend/admin/broadcasts/reach?segment=${segment}`, { headers: { Authorization: `Bearer ${Cookies.get('tn_token')}` } });
     const d = await r.json();
     setReach(d.data?.reach ?? 0);
   }
@@ -59,7 +61,7 @@ export default function BroadcastsPage() {
     setSending(true);
     setMsg('');
     const r = await fetch('/api/backend/admin/broadcasts/whatsapp', {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` },
       body: JSON.stringify({ template_name: templates[template]?.name, segment, params }),
     });
     const d = await r.json();

@@ -1,7 +1,9 @@
-﻿// admin/cashback/page.jsx — P14-2
+// admin/cashback/page.jsx — P14-2
 // Create/edit cashback rules with preview.
 'use client';
-import { useEffect, useState } from 'react';
+
+import { api } from '../../../lib/api';
+import Cookies from 'js-cookie';import { useEffect, useState } from 'react';
 
 const CATEGORIES = ['All categories', 'construction', 'paints', 'tiles', 'plumbing', 'electrical', 'tools'];
 
@@ -14,7 +16,7 @@ export default function AdminCashbackPage() {
   useEffect(() => { loadRules(); }, []);
 
   async function loadRules() {
-    const r = await fetch('/api/backend/admin/cashback-rules', { credentials: 'include' });
+    const r = await api.get('/admin/cashback-rules');
     const d = await r.json();
     setRules(d.data?.rules || []);
   }
@@ -22,7 +24,7 @@ export default function AdminCashbackPage() {
   async function save() {
     setSaving(true);
     const body = { ...form, category: form.category || null };
-    const r = await fetch('/api/backend/admin/cashback-rules', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch('/api/backend/admin/cashback-rules', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` }, body: JSON.stringify(body) });
     setSaving(false);
     if (r.ok) { setMsg('Rule created!'); loadRules(); }
     else setMsg('Error saving rule');
@@ -30,7 +32,7 @@ export default function AdminCashbackPage() {
 
   async function toggle(rule) {
     await fetch(`/api/backend/admin/cashback-rules/${rule.id}`, {
-      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` },
       body: JSON.stringify({ is_active: !rule.is_active }),
     });
     loadRules();

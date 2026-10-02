@@ -1,10 +1,12 @@
-﻿// (storefront)/wallet/page.jsx — P14-1 Upgraded
+// (storefront)/wallet/page.jsx — P14-1 Upgraded
 // Full wallet transaction history with balance counter, expiry alerts.
 'use client';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Cookies from 'js-cookie';
 
-const fmt = p => `₹${(p / 100).toFixed(p % 100 === 0 ? 0 : 2)}`;
+const fmt = p => `₹${((p || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
 
 function TxRow({ tx }) {
   const isCredit = tx.type === 'credit' || tx.type === 'cashback' || tx.type === 'referral';
@@ -37,15 +39,21 @@ function TxRow({ tx }) {
 }
 
 export default function WalletPage() {
+  const router = useRouter();
   const [balance, setBalance]   = useState(0);
   const [txns, setTxns]         = useState([]);
   const [loading, setLoading]   = useState(true);
 
   useEffect(() => {
-    fetch('/api/backend/customer/wallet/history?limit=50', { credentials: 'include' })
+    const token = Cookies.get('tn_token');
+    if (!token) { router.push('/auth?redirect=/wallet'); return; }
+    fetch('/api/backend/customer/wallet/history?limit=50', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
       .then(r => r.json())
       .then(d => {
-        setBalance(d.data?.balance || 0);
+        // balance may be returned as balance_paise or balance (in paise)
+        setBalance(d.data?.balance_paise ?? d.data?.balance ?? 0);
         setTxns(d.data?.transactions || []);
       })
       .catch(() => {})

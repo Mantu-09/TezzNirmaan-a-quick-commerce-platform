@@ -1,7 +1,9 @@
 ﻿// admin/nudges/page.jsx — P14-8
 // Configure reorder reminder nudge rules.
 'use client';
-import { useEffect, useState } from 'react';
+
+import { api } from '../../../lib/api';
+import Cookies from 'js-cookie';import { useEffect, useState } from 'react';
 
 const CATEGORIES = ['', 'construction', 'paints', 'tiles', 'plumbing', 'electrical', 'tools'];
 
@@ -13,20 +15,20 @@ export default function AdminNudgesPage() {
   useEffect(() => { loadRules(); }, []);
 
   async function loadRules() {
-    const r = await fetch('/api/backend/admin/nudges', { credentials: 'include' });
+    const r = await api.get('/admin/nudges');
     const d = await r.json();
     setRules(d.data?.rules || []);
   }
 
   async function save() {
     setSaving(true);
-    await fetch('/api/backend/admin/nudges', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    await fetch('/api/backend/admin/nudges', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` }, body: JSON.stringify(form) });
     setSaving(false);
     loadRules();
   }
 
   async function toggle(rule) {
-    await fetch(`/api/backend/admin/nudges/${rule.id}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: !rule.is_active }) });
+    await fetch(`/api/backend/admin/nudges/${rule.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Cookies.get('tn_token')}` }, body: JSON.stringify({ is_active: !rule.is_active }) });
     loadRules();
   }
 

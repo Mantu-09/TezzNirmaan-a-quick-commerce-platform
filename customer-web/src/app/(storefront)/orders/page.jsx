@@ -6,7 +6,7 @@
 // Shows all orders with status badge, items preview, reorder button.
 // ─────────────────────────────────────────────────────────────
 'use client';
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter }           from 'next/navigation';
 import Link                    from 'next/link';
 import Cookies                 from 'js-cookie';

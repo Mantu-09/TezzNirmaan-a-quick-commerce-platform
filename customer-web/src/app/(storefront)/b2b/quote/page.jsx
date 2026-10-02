@@ -1,4 +1,4 @@
-﻿// (storefront)/b2b/quote/page.jsx — P15-1
+// (storefront)/b2b/quote/page.jsx — P15-1
 // B2B contractors submit bulk quantity quote requests.
 'use client';
 import { useEffect, useState } from 'react';
@@ -26,8 +26,15 @@ export default function B2BQuotePage() {
 
   useEffect(() => { loadQuotes(); }, []);
 
+  async function getAuthHeaders(extra = {}) {
+    const Cookies = (await import('js-cookie')).default;
+    const token = Cookies.get('tn_token');
+    return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra };
+  }
+
   async function loadQuotes() {
-    const r = await fetch('/api/backend/customer/b2b/quotes', { credentials: 'include' });
+    const headers = await getAuthHeaders();
+    const r = await fetch('/api/backend/customer/b2b/quotes', { headers });
     const d = await r.json();
     setQuotes(d.data?.quotes || []);
   }
@@ -41,8 +48,9 @@ export default function B2BQuotePage() {
   async function submitQuote() {
     if (!items.length) return setMsg('Add at least one item');
     setSub(true);
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' });
     const r = await fetch('/api/backend/customer/b2b/quotes', {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers,
       body: JSON.stringify({ items, notes }),
     });
     const d = await r.json();

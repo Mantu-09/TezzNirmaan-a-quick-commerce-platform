@@ -102,7 +102,7 @@ export default function ProductCard({ product, shopSlug, citySlug }) {
         <div className="sf-product-name">{product.name}</div>
 
         {/* Unit */}
-        {product.unit && <div className="sf-product-brand">{product.unit}</div>}
+        {product.unit && <div className="sf-product-unit">{product.unit}</div>}
 
         {/* Shop name (multi-shop: show which shop) */}
         {product.shop?.name && (
